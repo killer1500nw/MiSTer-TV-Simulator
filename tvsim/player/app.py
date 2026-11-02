@@ -5,10 +5,11 @@ import os
 import random
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
-from .. import netinfo, streams
+from .. import netinfo, share, streams
 from ..schedule import Scheduler
 from ..store import channels_from_json, items_from_catalog, load_json
 from . import guide, h264feed, h264ring as hr, rumble
@@ -83,6 +84,7 @@ class App:
         self.rt = None
         self.idx = 0
         self.setup = False
+        self.join = None                                   # the 'join another MiSTer' screen on the set-up page
         self.tuning, self.tuning_until, self.tuning_start = '', 0.0, 0.0
         self.logo_until, self.logo_cache = 0.0, {}
         self.static_frames, self.static_i = [], 0
@@ -259,7 +261,116 @@ class App:
         c.text(320 - c.text_width(code or '----', 5) // 2, 286, code or '----', YELLOW, BLUE, 5)
         c.text(48, 350, '3. Add your Jellyfin or Plex server,', WHITE, BLUE, 2)
         c.text(48, 374, '   build channels, press Apply to TV.', WHITE, BLUE, 2)
-        c.text(48, 428, 'Waiting for channels...   BACK twice: exit', CYAN, BLUE, 1)
+        c.text(48, 408, 'Or press A to copy the channels of', YELLOW, BLUE, 2)
+        c.text(48, 428, 'another MiSTer in your home.', YELLOW, BLUE, 2)
+        c.text(48, 460, 'Waiting for channels...   BACK twice: exit', CYAN, BLUE, 1)
+
+    # joining another MiSTer (set-up page only) ---------------------------------------------------------------------------------
+    def start_join(self):
+        self.join = {'stage': 'scan', 'found': [], 'sel': 0, 'code': [0, 0, 0, 0], 'pos': 0, 'msg': ''}
+        self.dirty = True
+
+        def work():
+            try:
+                found = share.scan(share.device(self.folder)['id'])
+            except Exception as exc:
+                found = []
+                self.log('join: scan failed: %s' % exc)
+            if self.join and self.join['stage'] == 'scan':
+                self.join.update(stage='list', found=found, sel=0)
+            self.dirty = True
+        threading.Thread(target=work, daemon=True).start()
+
+    def send_join(self):
+        j = self.join
+        m = j['found'][j['sel']]
+        j['stage'] = 'busy'
+        self.dirty = True
+        code = ''.join(str(d) for d in j['code'])
+
+        def work():
+            try:
+                share.join(self.folder, m['host'], m['port'], code, m['name'], m['id'])
+                self.log('join: copied the channels of %s' % m['name'])
+                if self.join is j:
+                    j.update(stage='done')
+            except share.ShareError as exc:
+                if self.join is j:
+                    j.update(stage='error', msg=str(exc))
+            except Exception as exc:
+                if self.join is j:
+                    j.update(stage='error', msg='%s' % exc)
+            self.dirty = True
+        threading.Thread(target=work, daemon=True).start()
+
+    def handle_join(self, a):
+        j = self.join
+        st = j['stage']
+        if a == 'back':
+            self.join = None
+        elif st == 'list':
+            if a in ('up', 'down') and j['found']:
+                j['sel'] = (j['sel'] + (1 if a == 'down' else -1)) % len(j['found'])
+            elif a == 'ok':
+                if j['found']:
+                    j.update(stage='code', code=[0, 0, 0, 0], pos=0)
+                else:
+                    self.start_join()                     # nothing found: look again
+        elif st == 'code':
+            if a == 'up':
+                j['code'][j['pos']] = (j['code'][j['pos']] + 1) % 10
+            elif a == 'down':
+                j['code'][j['pos']] = (j['code'][j['pos']] - 1) % 10
+            elif a == 'right':
+                j['pos'] = min(3, j['pos'] + 1)
+            elif a == 'left':
+                j['pos'] = max(0, j['pos'] - 1)
+            elif a.startswith('digit:'):
+                j['code'][j['pos']] = int(a[6:])
+                j['pos'] = min(3, j['pos'] + 1)
+            elif a == 'ok':
+                if j['pos'] < 3:
+                    j['pos'] += 1
+                else:
+                    self.send_join()
+        elif st == 'error' and a == 'ok':
+            j.update(stage='code', pos=0)
+        self.dirty = True
+
+    def draw_join(self, c):
+        j = self.join
+        c.rect(0, 0, 640, 480, BLUE)
+        c.rect(0, 100, 640, 4, CYAN)
+        c.text(320 - c.text_width('JOIN ANOTHER MISTER', 3) // 2, 48, 'JOIN ANOTHER MISTER', YELLOW, BLUE, 3)
+        st = j['stage']
+        if st == 'scan':
+            c.text(48, 200, 'Looking for other MiSTers...', WHITE, BLUE, 2)
+        elif st == 'list':
+            if not j['found']:
+                c.text(48, 150, 'None found.', WHITE, BLUE, 2)
+                c.text(48, 190, 'The other MiSTer must be on the same', CYAN, BLUE, 2)
+                c.text(48, 214, 'network, with this program running.', CYAN, BLUE, 2)
+                c.text(48, 300, 'A: look again    BACK: cancel', WHITE, BLUE, 2)
+            else:
+                for k, m in enumerate(j['found'][:7]):
+                    sel = k == j['sel']
+                    c.rect(40, 124 + k * 36, 560, 32, YELLOW if sel else DARK)
+                    c.text(52, 132 + k * 36, fit('%s  %s' % (m['name'], m['host']), 33), BLUE if sel else WHITE, YELLOW if sel else DARK, 2)
+                c.text(48, 410, 'UP/DOWN: choose   A: join   BACK: cancel', CYAN, BLUE, 1)
+        elif st in ('code', 'error'):
+            m = j['found'][j['sel']]
+            c.text(48, 130, fit('Code shown on %s:' % m['name'], 36), WHITE, BLUE, 2)
+            for k in range(4):
+                x = 140 + k * 92
+                c.rect(x, 200, 64, 80, YELLOW if k == j['pos'] else DARK)
+                c.text(x + 4, 212, str(j['code'][k]), BLUE if k == j['pos'] else WHITE, YELLOW if k == j['pos'] else DARK, 7)
+            if st == 'error':
+                c.text(48, 316, fit(j['msg'], 36), rgb(255, 150, 150), BLUE, 2)
+            c.text(48, 410, 'UP/DOWN: digit  LEFT/RIGHT: move  A: join', CYAN, BLUE, 1)
+        elif st == 'busy':
+            c.text(48, 200, 'Copying the channels...', WHITE, BLUE, 2)
+        elif st == 'done':
+            c.text(48, 200, 'Done. Starting the channels...', WHITE, BLUE, 2)
 
     def draw_slate(self, c):
         title, sub = self.slate
@@ -289,7 +400,10 @@ class App:
             self.draw_slate(c)
             shown = True
         if self.setup:
-            self.draw_setup(c)
+            if self.join:
+                self.draw_join(c)
+            else:
+                self.draw_setup(c)
             shown = True
         elif self.guide_open:
             guide.look(self.theme).draw(self, c, now)
@@ -348,7 +462,13 @@ class App:
 
     def handle(self, a):
         mono = time.monotonic()
-        if self.setup:                                  # only BACK works until there are channels
+        if self.setup:                                  # only BACK works until there are channels (and A: join another MiSTer)
+            if self.join:
+                self.handle_join(a)
+                return
+            if a == 'ok':
+                self.start_join()
+                return
             if a == 'back':
                 if mono < self.exit_until:
                     self.quit = self.stop = True
@@ -554,6 +674,7 @@ class App:
                     break
             time.sleep(0.05)
         self.setup = False
+        self.join = None
         self.dirty = True
         self.log('channels found: %d' % len(self.channels))
 

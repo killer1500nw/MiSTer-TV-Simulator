@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .. import jellyfin, plex as plexlib
+from .. import jellyfin, plex as plexlib, share
 from ..schedule import Scheduler
 from ..store import channels_to_json, items_from_catalog
 from .compile import compile_all, compile_channel
@@ -352,6 +352,11 @@ class State:
                 if f.name not in keep:
                     f.unlink()
 
+    # sharing channels with other MiSTers (see share.py) ----------------------------------------------------------------------------
+    def share_state(self):
+        j = share.following(str(BUILD))
+        return {'name': share.device(str(BUILD))['name'], 'following': {'name': j['name'], 'host': j['host']} if j else None}
+
     # the guide's look: one word in <data>/guide_theme.txt, which the player reads whenever the guide opens ----------------------------
     def theme(self):
         from ..player.guide import THEMES, DEFAULT_THEME
@@ -505,7 +510,8 @@ class State:
                          'items': sum(1 for i in self.items if i.startswith(s['id'] + ':'))})
         return {'sources': srcs, 'groups': groups, 'spec': spec, 'stats': self.stats(spec), 'hidden_items': len(self.hidden_items),
                 'device': DEVICE, 'logos': sorted(int(n) for n in self.logo_index()), 'theme': self.theme(),
-                'themes': __import__('tvsim.player.guide', fromlist=['THEMES']).THEMES}
+                'themes': __import__('tvsim.player.guide', fromlist=['THEMES']).THEMES,
+                'share': self.share_state()}
 
 
 def make_handler(state):
@@ -554,6 +560,10 @@ def make_handler(state):
                     return self.reply(state.group_items(q.get('id', ''), q.get('q', ''), hidden))
                 if u.path == '/api/search':
                     return self.reply(state.search(q.get('q', ''), q.get('source', ''), hidden))
+                if u.path == '/api/share/stamp':
+                    return self.reply({'stamp': share.stamp(str(BUILD))})
+                if u.path == '/api/share':
+                    return self.reply(share.pack(str(BUILD)))
                 if u.path == '/api/logo':
                     return self.reply(state.logo_get(int(q['number'])))
                 if u.path == '/api/preview':
@@ -588,6 +598,20 @@ def make_handler(state):
                     if DEVICE:
                         return self.reply({'output': 'Press BACK twice on the pad or keyboard to leave the player.'})
                     return self.reply({'output': state.push(stop=True)})
+                if u == '/api/share/scan':
+                    return self.reply({'found': share.scan(share.device(str(BUILD))['id'])})
+                if u == '/api/share/join':
+                    try:
+                        name = share.join(str(BUILD), str(body['host']), int(body.get('port') or 8090), str(body['code']),
+                                          str(body.get('name') or ''), str(body.get('id') or ''))
+                    except share.ShareError as exc:
+                        return self.reply({'error': str(exc)}, 400)
+                    return self.reply({'name': name})
+                if u == '/api/share/leave':
+                    share.leave(str(BUILD))
+                    return self.reply({'ok': True})
+                if u == '/api/share/name':
+                    return self.reply(share.set_name(str(BUILD), str(body.get('name', ''))))
                 if u == '/api/theme':
                     state.set_theme(body['theme'])
                     return self.reply({'ok': True})
@@ -630,6 +654,9 @@ def main():
     state = State()
     host = os.environ.get('STUDIO_HOST') or ('0.0.0.0' if DEVICE else '127.0.0.1')     # on the MiSTer: reachable from the home network
     srv = ThreadingHTTPServer((host, port), make_handler(state))
+    if DEVICE:
+        share.serve_discovery(str(BUILD), port, lambda m: print(m, flush=True))
+        share.follow_in_background(str(BUILD), lambda m: print(m, flush=True))
     print('Studio: http://%s:%d  (Ctrl-C to stop)%s' % (host, port, '  code ' + state.code if state.code else ''), flush=True)
     try:
         srv.serve_forever()

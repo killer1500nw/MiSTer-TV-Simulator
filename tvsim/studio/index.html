@@ -67,6 +67,10 @@ details summary { cursor:pointer; color:var(--cyan); }
     <h2 style="margin-top:14px">Guide look</h2>
     <div class="row"><select id="theme" style="width:100%"></select></div>
     <div class="dim" style="font-size:12px">How the TV guide looks. You can also press Start (or M) while the guide is open on the TV.</div>
+    <div id="sharecard" style="display:none">
+      <h2 style="margin-top:14px">Share with other MiSTers</h2>
+      <div id="sharebox"></div>
+    </div>
     <h2 style="margin-top:14px">Sources</h2>
     <div id="sources"></div>
     <div class="row"><button id="addsrc">+ Add Jellyfin or Plex</button></div>
@@ -537,11 +541,37 @@ async function load() {
   const j = await api('/api/state');
   S.groups = j.groups; S.stats = j.stats; S.sources = j.sources; S.device = j.device; S.logos = j.logos || [];
   $('#theme').innerHTML = (j.themes || []).map(t => `<option value="${t[0]}" ${t[0] === j.theme ? 'selected' : ''}>${esc(t[1])}</option>`).join('');
+  paintShare(j.share, j.device);
   if (j.device) { $('#push').textContent = 'Apply to TV'; $('#push').title = 'Build the channels; the TV switches over in a few seconds'; $('#stop').style.display = 'none'; }
   if (!S.loaded) { S.spec = j.spec; S.loaded = true; }
   $('#catinfo').textContent = j.sources.reduce((n, x) => n + x.items, 0) + ' items from ' + j.sources.length + ' source' + (j.sources.length === 1 ? '' : 's') + (j.hidden_items ? ', ' + j.hidden_items + ' hidden' : '');
   if (S.sel === null && S.spec.channels.length) S.sel = S.spec.channels[0].number;
   paint(); paintSources(); paintLib(); paintLists(); paintSel();
+}
+function paintShare(sh, device) {
+  $('#sharecard').style.display = device && sh ? 'block' : 'none';
+  if (!device || !sh) return;
+  const box = $('#sharebox');
+  box.innerHTML = `<div class="row"><input id="sharename" value="${esc(sh.name)}" maxlength="24" style="width:100%" title="The name other MiSTers see for this one"></div>` + (sh.following
+    ? `<div class="dim" style="margin:6px 0">Following <b>${esc(sh.following.name)}</b> (${esc(sh.following.host)}): its channels, sign-ins and logos are copied here, and changes there arrive within about 5 minutes. Edits here are overwritten.</div><div class="row"><button id="shareleave">Stop following</button></div>`
+    : `<div class="dim" style="margin:6px 0">Show the same channels on this MiSTer as on another one in your home. Both need the right time. Press Find on this MiSTer, pick the other and type the code shown on its TV.</div><div class="row"><button id="sharefind">Find other MiSTers</button></div><div id="sharelist"></div>`);
+  $('#sharename').onchange = async e => { try { await api('/api/share/name', {name: e.target.value}); say('Name saved.', 2000); } catch (err) { say('Failed: ' + err.message); } };
+  if (sh.following) $('#shareleave').onclick = async () => { await api('/api/share/leave', {}); say('Stopped following. The copied channels stay.', 3500); load(); };
+  else $('#sharefind').onclick = async e => {
+    const btn = e.target; btn.disabled = true; say('Looking...');
+    try {
+      const j = await api('/api/share/scan', {});
+      say(j.found.length ? '' : 'No other MiSTer answered. It needs this program running and the same network.', 4000);
+      $('#sharelist').innerHTML = j.found.map((m, i) => `<div class="row"><button data-j="${i}" style="width:100%">Follow ${esc(m.name)} (${esc(m.host)})</button></div>`).join('');
+      document.querySelectorAll('[data-j]').forEach(b => b.onclick = async () => {
+        const m = j.found[+b.dataset.j], code = prompt('Type the 4-digit code shown on ' + m.name + "'s TV:");
+        if (!code) return;
+        say('Copying...');
+        try { await api('/api/share/join', {host: m.host, port: m.port, code: code.trim(), name: m.name, id: m.id}); say('Following ' + m.name + '. The TV switches over in a few seconds.', 5000); load(); }
+        catch (err) { say('Failed: ' + err.message); }
+      });
+    } catch (err) { say('Failed: ' + err.message); } finally { btn.disabled = false; }
+  };
 }
 async function act(btn, label, fn) {
   btn.disabled = true; say(label + '...');

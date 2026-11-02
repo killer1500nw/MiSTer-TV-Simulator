@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7b (beta)
+
+- **Share channels between MiSTers.** On the first-run screen press A (or, in Studio, **Share with other MiSTers → Find other MiSTers**) to copy the channels, sign-ins and logos of another MiSTer in your home, using its four-digit code. The copy is kept up to date: every five minutes it asks the other MiSTer one small question and copies again only when something changed. Both then show the same programme at the same moment. Not yet tested on two real MiSTers.
+
 ## 0.6b (beta)
 
 - TV guide themes: Satellite, Cable, Modern and Classic, chosen with Start in the guide or in Studio. Y shows a programme's details (episode, year, rating, length and the server's description, which needs a re-index to fetch). Channel and programme names wrap between words instead of being cut. The guide cursor now moves programme by programme, and L / R page through channels.

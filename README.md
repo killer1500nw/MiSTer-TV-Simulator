@@ -2,7 +2,7 @@
 
 Turn a MiSTer into a 90s set-top box. It builds **live TV channels from your own Jellyfin and Plex libraries**: shows start on the half hour, ad breaks fill the gaps, a scrolling guide lists what's on, and changing channel goes through a burst of static. Point it at a CRT and press channel up. You start it like any other core: **Other → MiSTer 90s TV**.
 
-> **Version 0.6b (beta).** Tested on one MiSTer (analog CRT output), Jellyfin 10.11 and Plex 1.43. Expect rough edges and please report them.
+> **Version 0.7b (beta).** Tested on one MiSTer (analog CRT output), Jellyfin 10.11 and Plex 1.43. Expect rough edges and please report them.
 
 | Channel banner | Guide (Satellite look) | Set-up screen |
 |---|---|---|
@@ -77,6 +77,16 @@ In the guide, Up/Down move between channels, Left/Right move to the previous or 
 | ![satellite](docs/img/guide-satellite.png) | ![cable](docs/img/guide-cable.png) | ![modern](docs/img/guide-modern.png) |
 
 The guide is drawn over the live picture, and the core blends it, so the Cable and Modern looks leave the picture visible. The look is chosen with **Start** on the TV or under **Guide look** in Studio, and is remembered.
+
+## Several MiSTers, one guide
+
+Every MiSTer shows the same programme at the same moment when it has the same channel files and the right time, so sharing is just copying the files from one MiSTer (the *main* one) to the others.
+
+1. Set up the main MiSTer as above.
+2. On another MiSTer that is on the same network, open **Other → MiSTer 90s TV**. On the first-run screen press **A** and pick the main MiSTer from the list (or use Studio: **Share with other MiSTers → Find other MiSTers**). Type the four-digit code shown on the main MiSTer.
+3. The channels, server sign-ins and logos are copied. When you press **Apply to TV** on the main one, the others pick the change up within about five minutes. Each MiSTer keeps its own guide look and its own TV.
+
+Notes: all MiSTers need a correct clock and time zone. The copy includes your Plex or Jellyfin sign-ins and travels unencrypted over your home network, protected only by the code. Each MiSTer plays straight from your Plex or Jellyfin server, so the server must manage several streams at once. A joined MiSTer can leave in Studio (**Stop following**). Finding other MiSTers uses one UDP broadcast on port 8091 when you ask; nothing else is sent until you join.
 
 ## Studio (the web page)
 
