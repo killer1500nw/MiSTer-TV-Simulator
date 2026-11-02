@@ -13,7 +13,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    runpy.run_path(str(ROOT / 'tools' / 'make_installer.py'), run_name='__main__')
+    try:
+        runpy.run_path(str(ROOT / 'tools' / 'make_installer.py'), run_name='__main__')
+    except SystemExit as exc:                          # make_installer exits when it is done; keep going unless it failed
+        if exc.code not in (None, 0):
+            raise
     version = (ROOT / 'tvsim' / '__init__.py').read_text().split('"')[1]
     installer = ROOT / 'release' / 'Install_MiSTer_90s_TV.sh'
     digest = hashlib.sha256(installer.read_bytes()).hexdigest()
