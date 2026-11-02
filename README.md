@@ -110,6 +110,12 @@ python tools/make_release.py                  # the installer plus its checksum
 python -m tvsim.studio                        # Studio on a PC, http://127.0.0.1:8090
 ```
 
+## How this code was written
+
+The code in this repository was written by an LLM working under human direction. The human contribution was research, compiling, running each build on real hardware, finding what broke, and narrowing it down to a root cause.
+
+This is stated up front because it is a fair thing for anyone evaluating the code to know. It is not an endorsement of the approach — draw your own conclusions.
+
 ## Licence and credits
 
 Licensed under the **GNU General Public Licence, version 2** (see `LICENSE`). Parts were copied from the author's earlier MiSTer player, which is GPL-2.0.
