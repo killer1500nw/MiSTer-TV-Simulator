@@ -28,12 +28,6 @@ MENU = 'echo "load_core /media/fat/menu.rbf" > /dev/MiSTer_cmd'
 # our player and its wrapper, plus other programs that feed the H.264 core, then any ffmpeg they left behind
 STOP = ('for p in $(ps | grep -v grep | grep -E "tvsim.player|youtube_crt.py --daemon|h264play" | awk \'{print $1}\'); '
         'do kill -9 $p; done; for p in $(ps | grep -v grep | grep "ffmpeg-.*-armhf-static" | awk \'{print $1}\'); do kill -9 $p; done; sleep 1')
-LAUNCHER = '''#!/bin/bash
-# MiSTer 90s TV Simulator: starts the player; the MiSTer menu comes back when it exits (BACK twice).
-D=/media/fat/Scripts/.config/MiSTer_90s_TV
-for p in $(ps | grep -v grep | grep -E "tvsim.player|youtube_crt.py --daemon" | awk '{print $1}'); do kill -9 $p; done
-cd "$D" && exec python3 -u -m tvsim.player "$D" >/tmp/c90.out 2>&1
-'''
 
 
 def ssh_exe():
@@ -104,14 +98,14 @@ def main():
     with tarfile.open(fileobj=buf, mode='w') as tar:
         for f in sorted((ROOT / 'tvsim').rglob('*.py')):
             add(tar, f.relative_to(ROOT).as_posix(), f.read_bytes())
-        for name in ('channels.json', 'runtime_catalog.json'):
+        for name in ('channels.json', 'runtime_catalog.json', 'guide_theme.txt'):
+            if not (Path(a.build) / name).exists():
+                continue
             add(tar, name, (Path(a.build) / name).read_bytes())
         add(tar, 'config.json', json.dumps({'chain': True, 'sources': sources}).encode())
     r = ssh(host, 'mkdir -p %s && rm -rf %s/tvsim && tar x -C %s' % (DIR, DIR, DIR), input=buf.getvalue())
     if r.returncode:
         sys.exit('copy failed')
-    ssh(host, 'cat > /media/fat/Scripts/MiSTer_90s_TV.sh && chmod +x /media/fat/Scripts/MiSTer_90s_TV.sh',
-        input=LAUNCHER.encode())
     # ffmpeg (a static ARM build, GPLv3, kept in third_party/) lives in the player's own folder on the card; sent once
     r = ssh(host, 'ls %s/ffmpeg-*-armhf-static/ffmpeg' % HOME, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if r.returncode:

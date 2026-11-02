@@ -5,6 +5,7 @@
 Sources (servers and their credentials), indexed catalogs, your own lists and the channel spec all live in studio/ next to
 the code. Listens on 127.0.0.1 only; every POST must carry the header X-Studio: 1 (a web page on another site cannot send it).
 """
+import base64
 import datetime as dt
 import hmac
 import json
@@ -30,6 +31,7 @@ DATA = Path(os.environ['C90_DATA']) if os.environ.get('C90_DATA') else None
 DEVICE = DATA is not None
 STUDIO = (DATA / 'studio') if DEVICE else ROOT / 'studio'
 CATALOGS = STUDIO / 'catalogs'
+LOGOS = STUDIO / 'logos'
 BUILD = DATA if DEVICE else ROOT / 'build'
 PAGE = Path(__file__).with_name('index.html')
 SECRET_KEYS = ('api_key', 'token')
@@ -44,6 +46,27 @@ def write_json(path, obj, indent=1):
     tmp = path.with_name(path.name + '.tmp')
     tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=indent), encoding='utf-8')
     os.replace(str(tmp), str(path))
+
+
+def bgra(rgba, grey=False, opacity=100):
+    """RGBA bytes (straight alpha, as the browser gives them) -> the framebuffer's BGRA.
+
+    grey:    every pixel becomes its own brightness (a grey version of the logo).
+    opacity: 100 = as drawn; lower fades the whole logo into the picture (the video core blends each pixel's transparency)."""
+    n = len(rgba) // 4
+    out = bytearray(len(rgba))
+    r, g, b = rgba[0::4], rgba[1::4], rgba[2::4]
+    if grey:
+        luma = bytes((299 * r[i] + 587 * g[i] + 114 * b[i]) // 1000 for i in range(n))
+        r = g = b = luma
+    out[0::4], out[1::4], out[2::4] = b, g, r
+    opacity = max(5, min(100, int(opacity)))
+    alpha = rgba[3::4]
+    out[3::4] = alpha if opacity == 100 else bytes(a * opacity // 100 for a in alpha)
+    for i in range(n):                                               # (a fully transparent pixel carries no colour either)
+        if not out[4 * i + 3]:
+            out[4 * i:4 * i + 3] = bytes(3)
+    return bytes(out)
 
 
 def pairing_code():
@@ -64,6 +87,7 @@ class State:
     def __init__(self):
         STUDIO.mkdir(parents=True, exist_ok=True)
         CATALOGS.mkdir(parents=True, exist_ok=True)
+        LOGOS.mkdir(parents=True, exist_ok=True)
         self.code = pairing_code() if DEVICE else None
         self.fails, self.locked_until = [], 0.0
         self.lock = threading.RLock()
@@ -258,6 +282,92 @@ class State:
             self.save_library()
             return result if act == 'list_create' else 'ok'
 
+    # channel logos: the page sends each logo already resized (RGBA pixels); the player gets a ready-to-copy BGRA file ------------------
+    LOGO_SIZES = ('small', 'medium', 'large')
+    LOGO_MAX = (256, 160)                                       # no logo bigger than this (pixels), whatever the page sends
+
+    def logo_index(self):
+        return read_json(LOGOS / 'index.json', {})
+
+    def logo_dims(self):
+        """{channel number: {size: (w, h)}} for compile (a small file: Studio saves the spec often)."""
+        return {int(n): {s: tuple(wh) for s, wh in sizes.items()} for n, sizes in self.logo_index().items()}
+
+    def logo_save(self, number, sizes):
+        clean, dims = {}, {}
+        for name in self.LOGO_SIZES:
+            e = sizes.get(name)
+            if not e:
+                continue
+            w, h = int(e['w']), int(e['h'])
+            raw = base64.b64decode(e['data'])
+            if not (1 <= w <= self.LOGO_MAX[0] and 1 <= h <= self.LOGO_MAX[1]) or len(raw) != w * h * 4:
+                raise ValueError('The %s logo is not a valid picture (up to %dx%d pixels).' % (name, self.LOGO_MAX[0], self.LOGO_MAX[1]))
+            clean[name] = {'w': w, 'h': h, 'data': e['data']}
+            dims[name] = [w, h]
+        if not clean:
+            raise ValueError('No logo came with the request.')
+        with self.lock:
+            write_json(LOGOS / ('%d.json' % number), {'sizes': clean}, None)
+            index = self.logo_index()
+            index[str(number)] = dims
+            write_json(LOGOS / 'index.json', index, None)
+
+    def logo_get(self, number):
+        return read_json(LOGOS / ('%d.json' % number), {'sizes': {}})
+
+    def logo_delete(self, number):
+        with self.lock:
+            (LOGOS / ('%d.json' % number)).unlink(missing_ok=True)
+            index = self.logo_index()
+            index.pop(str(number), None)
+            write_json(LOGOS / 'index.json', index, None)
+
+    def logo_move(self, old, new):
+        with self.lock:
+            src = LOGOS / ('%d.json' % old)
+            if src.exists() and old != new:
+                os.replace(str(src), str(LOGOS / ('%d.json' % new)))
+                index = self.logo_index()
+                if str(old) in index:
+                    index[str(new)] = index.pop(str(old))
+                write_json(LOGOS / 'index.json', index, None)
+
+    def write_logo_files(self, channels):
+        """For every built channel with a logo, write the BGRA file the player copies onto the screen; remove the ones no longer used."""
+        folder = BUILD / 'logos'
+        keep = set()
+        for ch in channels:
+            lg = ch.meta.get('logo')
+            if not lg:
+                continue
+            e = self.logo_get(ch.number).get('sizes', {}).get(lg['size'])
+            if not e:
+                continue
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / ('ch%d.bgra' % ch.number)).write_bytes(bgra(base64.b64decode(e['data']), lg['grey'], lg['opacity']))
+            keep.add('ch%d.bgra' % ch.number)
+        if folder.is_dir():
+            for f in folder.iterdir():
+                if f.name not in keep:
+                    f.unlink()
+
+    # the guide's look: one word in <data>/guide_theme.txt, which the player reads whenever the guide opens ----------------------------
+    def theme(self):
+        from ..player.guide import THEMES, DEFAULT_THEME
+        try:
+            t = (BUILD / 'guide_theme.txt').read_text(encoding='utf-8').strip()
+        except OSError:
+            return DEFAULT_THEME
+        return t if t in [k for k, _ in THEMES] else DEFAULT_THEME
+
+    def set_theme(self, name):
+        from ..player.guide import THEMES
+        if name not in [k for k, _ in THEMES]:
+            raise ValueError('unknown look: %s' % name)
+        BUILD.mkdir(parents=True, exist_ok=True)
+        (BUILD / 'guide_theme.txt').write_text(name, encoding='utf-8')
+
     # channel spec ------------------------------------------------------------------------------------------------------------
     def spec(self):
         return read_json(STUDIO / 'spec.json', {'channels': []})
@@ -266,7 +376,7 @@ class State:
         write_json(STUDIO / 'spec.json', spec)
 
     def stats(self, spec):
-        return compile_all(spec, self.catalog, self.all_groups, self.hidden_items)[2]
+        return compile_all(spec, self.catalog, self.all_groups, self.hidden_items, self.logo_dims())[2]
 
     def player_config(self):
         """What the player needs to reach each source (on the MiSTer, Studio is the only place these live)."""
@@ -315,8 +425,9 @@ class State:
             self.refine_used(spec)
         except Exception:                                    # a server that cannot be asked just leaves those items on the safe side
             pass
-        channels, items, stats = compile_all(spec, self.catalog, self.all_groups, self.hidden_items)
+        channels, items, stats = compile_all(spec, self.catalog, self.all_groups, self.hidden_items, self.logo_dims())
         BUILD.mkdir(parents=True, exist_ok=True)
+        self.write_logo_files(channels)
         write_json(BUILD / 'runtime_catalog.json', {'items': items}, None)
         if DEVICE:
             write_json(BUILD / 'config.json', self.player_config())
@@ -336,7 +447,7 @@ class State:
         spec = next((c for c in self.spec()['channels'] if c['number'] == number), None)
         if spec is None:
             raise KeyError('no such channel')
-        ch, _ = compile_channel(spec, self.catalog, self.all_groups, self.hidden_items)
+        ch, _ = compile_channel(spec, self.catalog, self.all_groups, self.hidden_items, self.logo_dims())
         sched = Scheduler(items_from_catalog(self.catalog))
         return [{'start': a.start, 'end': a.end, 'title': a.item.title, 'show': a.item.show, 'kind': a.item.kind,
                  'direct': a.item.direct_ok, 'slot': a.slot, 'ad': sched.is_ad(ch, a.item)} for a in sched.day(ch, date)]
@@ -393,7 +504,8 @@ class State:
                          'has_credential': bool(s.get('api_key') or s.get('token')), 'indexed': self.generated.get(s['id'], ''),
                          'items': sum(1 for i in self.items if i.startswith(s['id'] + ':'))})
         return {'sources': srcs, 'groups': groups, 'spec': spec, 'stats': self.stats(spec), 'hidden_items': len(self.hidden_items),
-                'device': DEVICE}
+                'device': DEVICE, 'logos': sorted(int(n) for n in self.logo_index()), 'theme': self.theme(),
+                'themes': __import__('tvsim.player.guide', fromlist=['THEMES']).THEMES}
 
 
 def make_handler(state):
@@ -442,6 +554,8 @@ def make_handler(state):
                     return self.reply(state.group_items(q.get('id', ''), q.get('q', ''), hidden))
                 if u.path == '/api/search':
                     return self.reply(state.search(q.get('q', ''), q.get('source', ''), hidden))
+                if u.path == '/api/logo':
+                    return self.reply(state.logo_get(int(q['number'])))
                 if u.path == '/api/preview':
                     return self.reply(state.preview(int(q['channel']), dt.date.fromisoformat(q['date'])))
                 self.reply({'error': 'not found'}, 404)
@@ -474,6 +588,18 @@ def make_handler(state):
                     if DEVICE:
                         return self.reply({'output': 'Press BACK twice on the pad or keyboard to leave the player.'})
                     return self.reply({'output': state.push(stop=True)})
+                if u == '/api/theme':
+                    state.set_theme(body['theme'])
+                    return self.reply({'ok': True})
+                if u == '/api/logo':
+                    state.logo_save(int(body['number']), body['sizes'])
+                    return self.reply({'ok': True})
+                if u == '/api/logo/delete':
+                    state.logo_delete(int(body['number']))
+                    return self.reply({'ok': True})
+                if u == '/api/logo/move':
+                    state.logo_move(int(body['from']), int(body['to']))
+                    return self.reply({'ok': True})
                 if u == '/api/library':
                     return self.reply({'result': state.library_action(body)})
                 if u == '/api/source/save':

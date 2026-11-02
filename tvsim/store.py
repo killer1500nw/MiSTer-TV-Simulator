@@ -4,7 +4,7 @@ import json
 
 from .model import Channel, Daypart, Item, Pool
 
-ITEM_FIELDS = ('id', 'title', 'duration', 'kind', 'show', 'season', 'episode', 'direct_ok', 'media')
+ITEM_FIELDS = ('id', 'title', 'duration', 'kind', 'show', 'season', 'episode', 'direct_ok', 'media', 'year', 'rating', 'overview')
 
 
 def load_json(path):
@@ -15,7 +15,11 @@ def load_json(path):
 def items_from_catalog(cat):
     out = {}
     for rec in cat['items'].values() if isinstance(cat['items'], dict) else cat['items']:
-        out[rec['id']] = Item(**{k: rec[k] for k in ITEM_FIELDS if k in rec})
+        fields = {k: rec[k] for k in ITEM_FIELDS if k in rec}
+        fields['year'] = int(fields.get('year') or 0)
+        fields['rating'] = fields.get('rating') or ''
+        fields['overview'] = fields.get('overview') or ''
+        out[rec['id']] = Item(**fields)
     return out
 
 

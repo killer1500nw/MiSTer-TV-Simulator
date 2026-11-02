@@ -14,6 +14,9 @@ class Item:
     episode: int = 0
     direct_ok: bool = True       # False -> needs server/PC transcode
     media: str = ''              # where the file is on the server (Plex: the part's key); Jellyfin needs none
+    year: int = 0                # for the guide's info panel
+    rating: str = ''
+    overview: str = ''           # the server's plot summary, cut short
 
 
 @dataclass

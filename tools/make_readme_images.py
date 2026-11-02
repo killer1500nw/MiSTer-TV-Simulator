@@ -51,12 +51,16 @@ def main():
     c = Canvas()
     app.idx = 1
     app.draw_banner(c, now)
-    png(os.path.join(out, 'banner.png'), c, back)
+    png(os.path.join(out, 'banner.png'), c, 'scene')
     c.clear()
+    from tvsim.player import guide
     app.guide_sel = 2
-    app.draw_guide(c, now)
-    app.draw_guide_footer(c)
-    png(os.path.join(out, 'guide.png'), c, back)
+    for name, _ in guide.THEMES:
+        c.clear()
+        guide.open_guide(app, now)
+        app.guide_sel = 2
+        guide.look(name).draw(app, c, now)
+        png(os.path.join(out, 'guide-%s.png' % name), c, 'scene')
     c.clear()
     app.draw_setup(c)
     png(os.path.join(out, 'setup.png'), c)
@@ -67,7 +71,7 @@ def main():
     c.clear()
     app.aspect_msg = 'ZOOM 16:9: Cut 16:9 bars baked in, fill'
     app.draw_aspect(c)
-    png(os.path.join(out, 'shape.png'), c, back)
+    png(os.path.join(out, 'shape.png'), c, 'scene')
     print('wrote', out)
 
 

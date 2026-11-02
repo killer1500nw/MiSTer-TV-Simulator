@@ -18,7 +18,7 @@ from .jellyfin import Jellyfin
 from .verdict import verdict
 
 TYPES = 'Movie,Episode'
-FIELDS = 'MediaStreams,ProductionYear,OfficialRating,SeriesId,SeriesName'
+FIELDS = 'MediaStreams,ProductionYear,OfficialRating,SeriesId,SeriesName,Overview'
 
 
 def item_record(row, slug='jf'):
@@ -35,6 +35,7 @@ def item_record(row, slug='jf'):
         'episode': row.get('IndexNumber') or 0,
         'year': row.get('ProductionYear'),
         'rating': row.get('OfficialRating'),
+        'overview': (row.get('Overview') or '')[:420],
         'direct_ok': ok,
         'why': why,
     }

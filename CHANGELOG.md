@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6b (beta)
+
+- TV guide themes: Satellite, Cable, Modern and Classic, chosen with Start in the guide or in Studio. Y shows a programme's details (episode, year, rating, length and the server's description, which needs a re-index to fetch). Channel and programme names wrap between words instead of being cut. The guide cursor now moves programme by programme, and L / R page through channels.
+- Per-channel logo: upload a PNG in Studio; it shows in the bottom right corner all the time or for a short time after tuning or when a programme starts.
+- **Other → MiSTer 90s TV** menu entry with a date code, like any core (the Scripts launcher is gone): the entry is a copy of the H.264 core named `MiSTer 90s TV_<date>.rbf`, and a background starter, added to `user-startup.sh` only with your consent, starts the player when it is chosen.
+- Gamepads no longer rumble for about 30 seconds when they connect while the player runs.
+- The installer builds the menu entry date from the build date, and the uninstaller removes the entry, the boot lines and the files.
+
 ## 0.5b (beta)
 
 First public beta.

@@ -78,14 +78,14 @@ def fetch(url, dest, label=''):
 
 
 def stop_running():
-    """Stop a running copy (player and web page) so the upgrade starts clean; the launcher starts both again."""
+    """Stop a running copy (background starter, player and web page) so the upgrade starts clean; the starter is started again at the end."""
     import subprocess
     try:
         out = subprocess.run(['ps'], capture_output=True, text=True).stdout
     except OSError:
         return
     for line in out.splitlines():
-        if ('tvsim.player' in line or 'tvsim.studio' in line) and 'grep' not in line:
+        if ('tvsim.player' in line or 'tvsim.studio' in line or 'tvsim.daemon' in line) and 'grep' not in line:
             try:
                 os.kill(int(line.split()[0]), 9)
             except (ValueError, OSError):
@@ -157,19 +157,82 @@ def install_core(fat, assume_yes):
     print('The H.264 core is installed.')
 
 
-def install_scripts(scripts):
-    for name in ('MiSTer_90s_TV.sh', 'Uninstall_MiSTer_90s_TV.sh'):
-        data = (HERE / name).read_bytes().replace(b'\r\n', b'\n')
-        target = scripts / name
-        target.write_bytes(data)
+BEGIN, END = '# BEGIN MiSTer 90s TV Simulator', '# END MiSTer 90s TV Simulator'
+STARTUP_LINE = 'case "${1:-start}" in start) ( bash /media/fat/Scripts/.config/MiSTer_90s_TV/daemon.sh </dev/null >/dev/null 2>&1 & ) ;; esac'
+
+
+def install_scripts(app, scripts):
+    """The background starter goes beside the program; the only script left in the Scripts menu is the uninstaller."""
+    for src, target in (('MiSTer_90s_TV_daemon.sh', app / 'daemon.sh'), ('Uninstall_MiSTer_90s_TV.sh', scripts / 'Uninstall_MiSTer_90s_TV.sh')):
+        target.write_bytes((HERE / src).read_bytes().replace(b'\r\n', b'\n'))
         os.chmod(target, 0o755)
+    old = scripts / 'MiSTer_90s_TV.sh'                  # versions before 0.6b put a launcher in the Scripts menu
+    if old.exists():
+        old.unlink()
+
+
+ENTRY_NAME = 'MiSTer 90s TV'
+
+
+def build_date():
+    """YYYYMMDD of this build: the menu shows it beside the name, as it does for every core."""
+    try:
+        return (HERE / 'BUILD_DATE.txt').read_text().strip()
+    except OSError:
+        return time.strftime('%Y%m%d')
+
+
+def install_menu_entry(fat, date=None):
+    """Other > MiSTer 90s TV: the MiSTer menu shows a date only for .rbf cores (name_YYYYMMDD.rbf), never for .mgl files, so the entry is a
+    copy of the H.264 core under this program's name. Loading it loads the core; the background starter then starts the player."""
+    other = fat / '_Other'
+    cores = sorted(other.glob('H264_*.rbf'))
+    if not cores:
+        print('No H.264 core in _Other yet, so no menu entry was made. Install the core, then run this installer again.')
+        return False
+    date = date or build_date()
+    target = other / ('%s_%s.rbf' % (ENTRY_NAME, date))
+    for old in list(other.glob(ENTRY_NAME + '_*.rbf')) + [other / (ENTRY_NAME + '.mgl')]:      # earlier builds (and the plain .mgl of 0.6b test builds)
+        if old != target and old.exists():
+            old.unlink()
+    shutil.copyfile(cores[-1], target)
+    print('Menu entry added: Other > %s (%s)' % (ENTRY_NAME, date))
+    return True
+
+
+def install_startup(fat, assume_yes):
+    """One line in /media/fat/linux/user-startup.sh (between marker lines, so it can be found and removed) starts the background starter at boot."""
+    path = fat / 'linux' / 'user-startup.sh'
+    text = path.read_text(encoding='utf-8', errors='replace') if path.exists() else '#!/bin/sh\n'
+    if BEGIN in text:
+        print('The start-up line is already in user-startup.sh.')
+        return True
+    print('\nThe menu entry needs a small background program that starts at boot and waits for you to choose it.')
+    print('This adds 3 lines (marked "MiSTer 90s TV Simulator") to %s. The uninstaller removes them.' % path)
+    if not assume_yes:
+        if not sys.stdin.isatty():
+            print('Not added (no one to ask). Run this installer from the MiSTer menu and answer yes, or run it with -y.')
+            return False
+        if input('Add them now? [y/N] ').strip().lower() not in ('y', 'yes'):
+            print('Skipped: Other > MiSTer 90s TV will not start the player until the background starter runs.')
+            return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text.rstrip('\n') + '\n\n%s\n%s\n%s\n' % (BEGIN, STARTUP_LINE, END), encoding='utf-8')
+    return True
+
+
+def start_daemon(app):
+    """Start the background starter now, so the menu entry works without a reboot."""
+    import subprocess
+    subprocess.Popen(['bash', str(app / 'daemon.sh')], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--fat', default='/media/fat', help='the MiSTer SD card (for testing elsewhere)')
     ap.add_argument('--no-download', action='store_true', help='skip the downloads (for testing the rest)')
-    ap.add_argument('-y', '--yes', action='store_true', help='do not ask before downloading the H.264 core')
+    ap.add_argument('-y', '--yes', action='store_true', help='do not ask: download the H.264 core if missing and add the start-up line')
     a = ap.parse_args()
     fat = Path(a.fat)
     app, home, scripts = fat / 'Scripts' / '.config' / 'MiSTer_90s_TV', fat / 'MiSTer_90s_TV', fat / 'Scripts'
@@ -182,12 +245,18 @@ def main():
         except Exception as exc:
             problems.append(str(exc))
             print('PROBLEM: %s' % exc, flush=True)
-    install_scripts(scripts)
+    install_scripts(app, scripts)
+    install_menu_entry(fat)               # (again after an update of the H.264 core, so that the entry carries the new core)
+    boot = install_startup(fat, a.yes)
+    start_daemon(app)
     print()
     if problems:
         print('Installed, but not everything downloaded. Run this installer again once the MiSTer is online.')
         return 1
-    print('Done. In the MiSTer menu open Scripts > MiSTer_90s_TV.')
+    if boot:
+        print('Done. In the MiSTer menu open Other > MiSTer 90s TV.')
+    else:
+        print('Installed. Without the start-up line, start the background starter by hand (bash %s/daemon.sh) or reboot after adding it.' % app)
     print('The TV shows an address and a code. Open that address in a browser on your phone or computer,')
     print('type the code, add your Jellyfin or Plex server and build your channels.')
     return 0

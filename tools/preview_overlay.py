@@ -13,17 +13,41 @@ from tvsim.player.app import App  # noqa: E402
 from tvsim.player.overlay import Canvas  # noqa: E402
 
 
+def scene(w, h):
+    """A stand-in for the live picture behind the overlay (a sky, a hill and a sun), so see-through panels can be judged."""
+    rows = []
+    for j in range(h):
+        row = bytearray()
+        for i in range(w):
+            t = j / h
+            r, g, b = int(70 + 90 * t), int(120 + 60 * t), int(190 - 60 * t)
+            if j > h * 0.62 + 30 * ((i / w - 0.4) ** 2) * 4:
+                r, g, b = 50, 110, 60
+            if (i - 470) ** 2 + (j - 120) ** 2 < 40 ** 2:
+                r, g, b = 250, 225, 120
+            row += bytes((r, g, b))
+        rows.append(bytes(row))
+    return rows
+
+
 def png(path, canvas, backdrop=(40, 40, 40)):
+    """Write the canvas as a PNG, blended with its partial transparency over `backdrop` (an (r, g, b) or the sample scene())."""
     w, h, b = canvas.w, canvas.h, canvas.buf
+    back = scene(w, h) if backdrop == 'scene' else None
     rows = []
     for j in range(h):
         row = bytearray([0])
         for i in range(w):
             o = (j * w + i) * 4
-            if b[o + 3]:
+            a = b[o + 3]
+            bg = back[j][i * 3:i * 3 + 3] if back else bytes(backdrop)
+            if a == 255:
                 row += bytes((b[o + 2], b[o + 1], b[o]))
+            elif a == 0:
+                row += bg
             else:
-                row += bytes(backdrop)
+                row += bytes(((b[o + 2] * a + bg[0] * (255 - a)) // 255, (b[o + 1] * a + bg[1] * (255 - a)) // 255,
+                              (b[o] * a + bg[2] * (255 - a)) // 255))
         rows.append(bytes(row))
 
     def chunk(t, d):
@@ -51,8 +75,9 @@ def main():
     png(os.path.join(out, 'banner.png'), c)
     c.clear()
     app.guide_sel = 2
-    app.draw_guide(c, now)
-    app.draw_guide_footer(c)
+    from tvsim.player import guide
+    guide.open_guide(app, now)
+    guide.look('classic').draw(app, c, now)
     png(os.path.join(out, 'guide.png'), c)
     c.clear()
     app.digits = '4'

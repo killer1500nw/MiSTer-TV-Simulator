@@ -9,6 +9,7 @@ with pinned checksums.
 import base64
 import io
 import sys
+import time
 import tarfile
 from pathlib import Path
 
@@ -50,12 +51,13 @@ def main():
             if f.is_file() and f.suffix in ('.py', '.html') and '__pycache__' not in f.parts:
                 add(tar, f.relative_to(ROOT).as_posix(), f.read_bytes())
         inst = ROOT / 'tools' / 'installer'
-        for name in ('install_setup.py', 'MiSTer_90s_TV.sh', 'Uninstall_MiSTer_90s_TV.sh'):
+        for name in ('install_setup.py', 'MiSTer_90s_TV_daemon.sh', 'Uninstall_MiSTer_90s_TV.sh'):
             add(tar, name, (inst / name).read_bytes().replace(b'\r\n', b'\n'), 0o755)
         add(tar, 'cacert.pem', (ROOT / 'third_party' / 'certs' / 'cacert.pem').read_bytes())
         add(tar, 'CERTIFICATES-NOTICE.txt', (ROOT / 'third_party' / 'certs' / 'CERTIFICATES-NOTICE.txt').read_bytes())
         add(tar, 'NOTICE.md', (ROOT / 'NOTICE.md').read_bytes())
         add(tar, 'VERSION.txt', (version + '\n').encode())
+        add(tar, 'BUILD_DATE.txt', (time.strftime('%Y%m%d') + '\n').encode())
     payload = base64.encodebytes(buf.getvalue())
     out = ROOT / 'release' / 'Install_MiSTer_90s_TV.sh'
     out.parent.mkdir(exist_ok=True)

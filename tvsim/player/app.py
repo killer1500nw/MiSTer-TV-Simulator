@@ -11,10 +11,10 @@ from pathlib import Path
 from .. import netinfo, streams
 from ..schedule import Scheduler
 from ..store import channels_from_json, items_from_catalog, load_json
-from . import h264feed, h264ring as hr
+from . import guide, h264feed, h264ring as hr, rumble
 from .aspect import AspectBook
 from .chain import ChainFeeder, Entry
-from .overlay import Overlay, rgb
+from .overlay import OV_H, OV_W, Overlay, rgb
 from .pad import Pad
 
 BANNER_SECONDS = 4.0
@@ -84,11 +84,15 @@ class App:
         self.idx = 0
         self.setup = False
         self.tuning, self.tuning_until, self.tuning_start = '', 0.0, 0.0
+        self.logo_until, self.logo_cache = 0.0, {}
         self.static_frames, self.static_i = [], 0
         self.stop = self.quit = False
         self.banner_until = 0.0
         self.digits, self.digit_time = '', 0.0
-        self.guide_open, self.guide_sel, self.guide_shift = False, 0, 0
+        self.guide_open, self.guide_sel, self.guide_info = False, 0, False
+        self.guide_at = self.guide_win = None
+        self.guide_cache = {}
+        self.theme = guide.DEFAULT_THEME
         self.slate = None
         self.exit_until = 0.0
         self.dirty = True
@@ -122,6 +126,8 @@ class App:
             return False
         number = self.channels[self.idx].number if self.channels else None
         self.cfg, self.items, self.channels = cfg, items, channels
+        self.logo_cache = {}                                  # (logos are read again from the new files)
+        self.guide_cache = {}                                 # (and the guide's programme cells)
         self.sched = Scheduler(items)
         self.aspects = AspectBook(os.path.join(self.folder, 'aspects.json'), cfg.get('aspect_default', 'Fit'))
         self.idx = next((i for i, c in enumerate(channels) if c.number == number), 0)
@@ -162,39 +168,58 @@ class App:
         c.rect(430, 40, 170, 56, BLUE)
         c.text(446, 52, 'CH ' + self.digits.ljust(2, '_'), YELLOW, BLUE, 4)
 
-    def draw_guide(self, c, now):
-        c.rect(24, 24, 592, 432, DARK)
-        c.rect(24, 24, 592, 40, MID)
-        c.text(40, 32, 'TV GUIDE', YELLOW, MID, 3)
-        t = '%d/%d %s' % (now.month, now.day, clock_text(now.hour * 3600 + now.minute * 60))
-        c.text(600 - c.text_width(t), 40, t, WHITE, MID, 2)
-        base = now.replace(minute=now.minute - now.minute % 30, second=0, microsecond=0) + dt.timedelta(minutes=30 * self.guide_shift)
-        cols = [base, base + dt.timedelta(minutes=30)]
-        lx, cx, cw = 32, 192, 208
-        c.rect(24, 64, 592, 24, MID)
-        for i, when in enumerate(cols):
-            c.text(cx + i * cw + 4, 68, clock_text(when.hour * 3600 + when.minute * 60), CYAN, MID, 2)
-        n = len(self.channels)
-        top = max(0, min(self.guide_sel - 3, n - 8))
-        for r in range(min(8, n)):
-            i = top + r
-            ch = self.channels[i]
-            y = 92 + r * 40
-            bg = SEL if i == self.guide_sel else (BLUE if r % 2 == 0 else DARK)
-            c.rect(24, y, 592, 38, bg)
-            c.text(lx, y + 11, fit('%2d %s' % (ch.number, ch.name.upper()), 10), YELLOW if i == self.guide_sel else CYAN, bg, 2)
-            for k, when in enumerate(cols):
-                title, start, _ = self.span(ch, when)
-                prefix = '<' if start < when.hour * 3600 + when.minute * 60 else ''
-                c.rect(cx + k * cw - 4, y, 4, 38, DARK)
-                c.text(cx + k * cw + 4, y + 11, fit(prefix + title, 12), WHITE, bg, 2)
+    def nice_title(self, item):
+        return nice_title(item)
 
-    def draw_guide_footer(self, c):
-        addr, code = self.studio_lines()
-        if addr:
-            c.rect(24, 416, 592, 40, MID)
-            c.text(40, 424, fit("EDIT CHANNELS: %s" % addr, 70), CYAN, MID, 1)
-            c.text(40, 438, fit("CODE %s   Y: SHAPE   X: GUIDE" % (code or "----"), 70), WHITE, MID, 1)
+    def read_theme(self):
+        """The guide's look: what was last chosen on the TV or in Studio (guide_theme.txt), else the config, else the default."""
+        names = [k for k, _ in guide.THEMES]
+        try:
+            with open(os.path.join(self.folder, 'guide_theme.txt'), encoding='utf-8') as f:
+                t = f.read().strip()
+            if t in names:
+                return t
+        except OSError:
+            pass
+        t = self.cfg.get('guide_theme')
+        return t if t in names else guide.DEFAULT_THEME
+
+    def save_theme(self, name):
+        try:
+            with open(os.path.join(self.folder, 'guide_theme.txt'), 'w', encoding='utf-8') as f:
+                f.write(name)
+        except OSError:
+            pass
+
+    def logo_for(self, ch):
+        """-> (settings, BGRA bytes) of the channel's logo, or None (none set, or its file is missing or the wrong size)."""
+        lg = ch.meta.get('logo')
+        if not lg:
+            return None
+        if lg['file'] not in self.logo_cache:
+            try:
+                with open(os.path.join(self.folder, lg['file']), 'rb') as f:
+                    data = f.read()
+            except OSError:
+                data = b''
+            self.logo_cache[lg['file']] = data if len(data) == lg['w'] * lg['h'] * 4 else b''
+        data = self.logo_cache[lg['file']]
+        return (lg, data) if data else None
+
+    def arm_logo(self):
+        """A logo set to show for a short time starts its time now (a tune-in, a new programme, the info button)."""
+        lg = self.channels[self.idx].meta.get('logo') if self.channels else None
+        self.logo_until = time.monotonic() + lg['seconds'] if lg and lg['mode'] == 'timed' else 0.0
+
+    def draw_logo(self, c, got, above_banner):
+        """The logo in the bottom right corner (above the info banner while that is showing), inside the safe area of a CRT."""
+        lg, data = got
+        w, h = lg['w'], lg['h']
+        x = OV_W - 48 - w
+        y = (322 - 8 - h) if above_banner else (OV_H - 40 - h)
+        for j in range(h):
+            o = ((y + j) * c.w + x) * 4
+            c.buf[o:o + w * 4] = data[j * w * 4:(j + 1) * w * 4]
 
     def static_frame(self):
         """A ready-made grey static picture (a handful are made once, so showing one costs a copy of the buffer, not 50 ms of work)."""
@@ -250,6 +275,8 @@ class App:
             self.banner_until = 0.0
         if self.aspect_until and mono >= self.aspect_until:
             self.aspect_until = 0.0
+        if self.logo_until and mono >= self.logo_until:
+            self.logo_until = 0.0
         if self.digits and mono - self.digit_time > DIGIT_WAIT:
             self.tune_digits()
         if not self.tuning:
@@ -265,8 +292,9 @@ class App:
             self.draw_setup(c)
             shown = True
         elif self.guide_open:
-            self.draw_guide(c, now)
-            self.draw_guide_footer(c)
+            guide.look(self.theme).draw(self, c, now)
+            if self.guide_info:
+                guide.draw_info(self, c, now)
             shown = True
         elif self.banner_until:
             self.draw_banner(c, now)
@@ -274,6 +302,11 @@ class App:
         if self.digits:
             self.draw_digits(c)
             shown = True
+        if not (self.tuning or self.setup or self.guide_open or self.slate) and self.channels:
+            got = self.logo_for(self.channels[self.idx])
+            if got and (got[0]['mode'] == 'always' or mono < self.logo_until):
+                self.draw_logo(c, got, bool(self.banner_until))
+                shown = True
         if mono < self.aspect_until:
             self.draw_aspect(c)
             shown = True
@@ -291,6 +324,7 @@ class App:
     # input -------------------------------------------------------------------------------------------------------------------
     def show_banner(self):
         self.banner_until = time.monotonic() + BANNER_SECONDS
+        self.arm_logo()
         self.dirty = True
 
     def change(self, delta=0, number=None):
@@ -332,18 +366,21 @@ class App:
             self.tune_digits()
             return
         if self.guide_open:
-            if a == 'up':
-                self.guide_sel = (self.guide_sel - 1) % len(self.channels)
-            elif a == 'down':
-                self.guide_sel = (self.guide_sel + 1) % len(self.channels)
-            elif a == 'left':
-                self.guide_shift = max(0, self.guide_shift - 1)
-            elif a == 'right':
-                self.guide_shift = min(24, self.guide_shift + 1)
+            look = guide.look(self.theme)
+            if a == 'info':                                     # Y / I: the details of the highlighted programme
+                self.guide_info = not self.guide_info
+            elif self.guide_info and a in ('back', 'guide'):
+                self.guide_info = False
+            elif a in ('up', 'down', 'left', 'right', 'pgup', 'pgdn'):
+                self.guide_info = False
+                guide.move(self, a, look.rows, look.cols)
             elif a == 'ok':
                 self.guide_open = False
                 self.change(number=self.channels[self.guide_sel].number)
-            elif a in ('back', 'guide', 'menu'):
+            elif a == 'menu':                                   # Start / M: the next look, remembered
+                self.theme = guide.next_theme(self.theme)
+                self.save_theme(self.theme)
+            elif a in ('back', 'guide'):
                 self.guide_open = False
             self.dirty = True
             return
@@ -357,12 +394,14 @@ class App:
             else:
                 self.show_banner()
             self.dirty = True
-        elif a in ('menu', 'right'):
+        elif a in ('menu', 'right', 'info'):
             self.cycle_aspect(+1)
         elif a == 'left':
             self.cycle_aspect(-1)
         elif a == 'guide':
-            self.guide_open, self.guide_sel, self.guide_shift = True, self.idx, 0
+            self.theme = self.read_theme()
+            guide.open_guide(self, dt.datetime.now())
+            self.guide_open = True
             self.dirty = True
         elif a == 'back':
             if mono < self.exit_until:
@@ -390,7 +429,8 @@ class App:
             self.last_poll = mono
             for a in self.pad.poll():
                 self.handle(a)
-        due = ((self.banner_until and mono >= self.banner_until) or (self.aspect_until and mono >= self.aspect_until) or (self.digits and mono - self.digit_time > DIGIT_WAIT)
+        due = ((self.banner_until and mono >= self.banner_until) or (self.aspect_until and mono >= self.aspect_until)
+               or (self.logo_until and mono >= self.logo_until) or (self.digits and mono - self.digit_time > DIGIT_WAIT)
                or (self.exit_until and mono >= self.exit_until))
         if (self.dirty or due) and mono - self.last_draw >= (0.2 if self.tuning else 0.12):
             self.last_draw = mono
@@ -403,6 +443,7 @@ class App:
                 self.log('  picture after %.1f s (first video data %.1f s, first sound data %.1f s)' % (
                     mono - self.tuning_start, marks.get('video', -1), marks.get('sound', -1)))
                 self.tuning = ''
+                self.arm_logo()
             self.dirty = True                              # the static is redrawn every time
         if mono - self.last_file_check >= 2.0 and not self.setup:
             self.last_file_check = mono
@@ -565,6 +606,8 @@ class App:
         self.rt = Runtime(os.path.join(self.folder, 'cacert.pem'))
         failures, recoveries = 0, 0
         self.open_core()
+        mute = rumble.Mute()
+        mute.start()                                   # pads do not rumble while the TV is on
         try:
             self.static_frame()                        # make the static pictures now, not in the middle of the first channel change
             if not self.load_data():
@@ -608,6 +651,7 @@ class App:
                         raise
                     self.wait_slate('NO SIGNAL', fit(item.title, 36), time.time() + 4)
         finally:
+            mute.stop()
             self.close_core()
 
 

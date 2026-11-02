@@ -64,6 +64,9 @@ details summary { cursor:pointer; color:var(--cyan); }
     <h2>Channels</h2>
     <div id="chanlist"></div>
     <div class="row"><button id="newchan">+ New channel</button></div>
+    <h2 style="margin-top:14px">Guide look</h2>
+    <div class="row"><select id="theme" style="width:100%"></select></div>
+    <div class="dim" style="font-size:12px">How the TV guide looks. You can also press Start (or M) while the guide is open on the TV.</div>
     <h2 style="margin-top:14px">Sources</h2>
     <div id="sources"></div>
     <div class="row"><button id="addsrc">+ Add Jellyfin or Plex</button></div>
@@ -108,7 +111,7 @@ details summary { cursor:pointer; color:var(--cyan); }
 'use strict';
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const S = {groups: [], sources: [], spec: {channels: []}, stats: {}, sel: null, target: '', loaded: false};
+const S = {logos: [], groups: [], sources: [], spec: {channels: []}, stats: {}, sel: null, target: '', loaded: false};
 let saveTimer = null;
 
 function codeGet() { try { return localStorage.getItem('c90code') || ''; } catch (e) { return ''; } }
@@ -191,6 +194,70 @@ function paintStats() {
     e.innerHTML = s ? `${s.items} items, ${s.hours} h, ${s.direct} play directly, ${s.items - s.direct} need a PC transcode` : '<span class="warn">no items</span>';
   });
 }
+// ---- channel logo: the picture is shrunk here in the browser (three sizes) and sent as plain RGBA pixels -----------------------------
+const LOGO_SIZES = {small: [48, 32], medium: [72, 48], large: [104, 68]};          // the biggest width and height of each size, in screen pixels
+const hasLogo = c => S.logos && S.logos.includes(c.number);
+function logoCard(c) {
+  const lg = c.logo || {mode: 'always', seconds: 8, size: 'medium'};
+  const on = hasLogo(c);
+  return `<div class="card"><div class="row"><input type="file" id="lg-file" accept="image/png,image/*">
+    <canvas id="lg-prev" width="200" height="125" style="background:#00004a;border:1px solid var(--line);display:${on ? 'block' : 'none'}"></canvas>
+    ${on ? '<button class="small danger" id="lg-del">Remove logo</button>' : '<span class="dim">A PNG with a transparent background works best. It shows in the bottom right corner of the TV.</span>'}</div>
+    <div class="row"><label>Show</label><select id="lg-mode"><option value="always" ${lg.mode === 'always' ? 'selected' : ''}>All the time</option><option value="timed" ${lg.mode === 'timed' ? 'selected' : ''}>For a short time</option><option value="off" ${lg.mode === 'off' ? 'selected' : ''}>Never</option></select>
+    <label>for</label><input id="lg-sec" type="number" min="1" max="120" style="width:64px" value="${lg.seconds || 8}"> <span class="dim">seconds, each time the channel is tuned or a programme starts</span>
+    <label>Size</label><select id="lg-size"><option value="small" ${lg.size === 'small' ? 'selected' : ''}>Small</option><option value="medium" ${lg.size === 'medium' || !lg.size ? 'selected' : ''}>Medium</option><option value="large" ${lg.size === 'large' ? 'selected' : ''}>Large</option></select>
+    <label><input type="checkbox" id="lg-grey" ${lg.grey ? 'checked' : ''}> grey</label>
+    <label>Opacity</label><select id="lg-op">${[100, 75, 50, 35].map(v => `<option value="${v}" ${(lg.opacity || 100) === v ? 'selected' : ''}>${v}%</option>`).join('')}</select></div></div>`;
+}
+async function drawLogoPreview(c) {
+  const cv = $('#lg-prev'); if (!cv || !hasLogo(c)) return;
+  const size = (c.logo && c.logo.size) || 'medium';
+  try {
+    const e = (await api('/api/logo?number=' + c.number)).sizes[size] || Object.values((await api('/api/logo?number=' + c.number)).sizes)[0];
+    const bin = atob(e.data), px = new Uint8ClampedArray(bin.length);
+    for (let i = 0; i < bin.length; i++) px[i] = bin.charCodeAt(i);
+    cv.width = e.w; cv.height = e.h;
+    cv.getContext('2d').putImageData(new ImageData(px, e.w, e.h), 0, 0);
+  } catch (err) { /* the preview is only a convenience */ }
+}
+function shrink(img, maxW, maxH) {
+  const k = Math.min(maxW / img.width, maxH / img.height, 1), w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const g = cv.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(img, 0, 0, w, h);
+  const px = g.getImageData(0, 0, w, h).data;
+  let bin = ''; for (let i = 0; i < px.length; i += 8192) bin += String.fromCharCode.apply(null, px.subarray(i, i + 8192));
+  return {w, h, data: btoa(bin)};
+}
+function wireLogo(c) {
+  const lg = () => (c.logo = c.logo || {mode: 'always', seconds: 8, size: 'medium'});
+  $('#lg-mode').onchange = e => { lg().mode = e.target.value; save(); };
+  $('#lg-sec').onchange = e => { lg().seconds = Math.max(1, Math.min(120, +e.target.value || 8)); save(); };
+  $('#lg-size').onchange = e => { lg().size = e.target.value; save(); drawLogoPreview(c); };
+  $('#lg-grey').onchange = e => { lg().grey = e.target.checked; save(); previewLook(); };
+  $('#lg-op').onchange = e => { lg().opacity = +e.target.value; save(); previewLook(); };
+  const previewLook = () => { const cv = $('#lg-prev'); if (cv) cv.style.filter = (lg().grey ? 'grayscale(1) ' : '') + 'opacity(' + ((lg().opacity || 100) / 100) + ')'; };
+  previewLook();
+  if ($('#lg-del')) $('#lg-del').onclick = async () => { await api('/api/logo/delete', {number: c.number}); delete c.logo; S.logos = S.logos.filter(n => n !== c.number); save(); paintEditor(); };
+  $('#lg-file').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 4 * 1024 * 1024) return say('That picture is bigger than 4 MB: pick a smaller one.', 4000);
+    const img = new Image(), url = URL.createObjectURL(f);
+    img.onload = async () => {
+      try {
+        const sizes = {}; for (const [name, [mw, mh]] of Object.entries(LOGO_SIZES)) sizes[name] = shrink(img, mw, mh);
+        await api('/api/logo', {number: c.number, sizes});
+        if (!S.logos.includes(c.number)) S.logos.push(c.number);
+        if (!c.logo) c.logo = {mode: 'always', seconds: 8, size: 'medium'};
+        save(); paintEditor(); say('Logo saved. Press Apply to TV to show it.', 4000);
+      } catch (err) { say('Could not save the logo: ' + err.message); }
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => say('That file is not a picture the browser can open.', 4000);
+    img.src = url;
+  };
+  drawLogoPreview(c);
+}
+
 function paintEditor() {
   const c = chan(), ed = $('#editor');
   if (!c) { ed.innerHTML = `<h2>Channel</h2><p class="dim">Pick or create a channel.</p>${S.spec.channels.length ? '' : '<button id="starter" class="primary">Create starter channels</button>'}`;
@@ -213,18 +280,20 @@ function paintEditor() {
     <button class="danger small" id="e-del">Delete channel</button></div>
     <h2>Programme pools</h2>${pools}<div class="row"><button id="addpool">+ Add pool</button></div>
     <h2>Ad breaks</h2>${ads}
+    <h2>Channel logo</h2>${logoCard(c)}
     <h2>Day parts (which pool plays when)</h2>${dps}<div class="row"><button id="adddp">+ Add day part</button></div>
     <h2>Preview</h2><div class="row"><input id="pv-date" type="date" value="${today()}"><button id="pv">Show schedule</button></div><div id="pv-out"></div>`;
   wireEditor(c);
 }
 function wireEditor(c) {
   const bind = (sel, fn) => document.querySelectorAll(sel).forEach(fn);
-  $('#e-num').onchange = e => { const n = +e.target.value; if (S.spec.channels.some(x => x !== c && x.number === n)) { e.target.value = c.number; return say('That number is taken.', 2500); } c.number = n; S.sel = n; save(); paint(); };
+  $('#e-num').onchange = e => { const n = +e.target.value; if (S.spec.channels.some(x => x !== c && x.number === n)) { e.target.value = c.number; return say('That number is taken.', 2500); } api('/api/logo/move', {from: c.number, to: n}).catch(() => {}); c.number = n; S.sel = n; save(); paint(); };
   $('#e-name').oninput = e => { c.name = e.target.value; save(); paintChannels(); };
   $('#e-slot').onchange = e => { c.slot_minutes = Math.max(10, +e.target.value || 30); save(); paintEditor(); };
   $('#e-brk').onchange = e => { c.max_break_minutes = Math.max(0, +e.target.value || 0); save(); };
   $('#e-rep').onchange = e => { c.no_repeat_hours = +e.target.value || 0; save(); };
-  $('#e-del').onclick = () => { if (confirm('Delete channel ' + c.number + '?')) { S.spec.channels = S.spec.channels.filter(x => x !== c); S.sel = null; save(); paint(); } };
+  $('#e-del').onclick = () => { if (confirm('Delete channel ' + c.number + '?')) { api('/api/logo/delete', {number: c.number}).catch(() => {}); S.spec.channels = S.spec.channels.filter(x => x !== c); S.sel = null; save(); paint(); } };
+  wireLogo(c);
   $('#addpool').onclick = () => { let n = 'pool' + (c.pools.length + 1); c.pools.push({name: n, mode: 'shuffle', groups: [], items: [], filters: newFilters(false)}); S.target = n; save(); paint(); };
   $('#adddp').onclick = () => { c.dayparts.push({start: 0, end: 1440, pools: c.pools.slice(0, 1).map(p => p.name)}); save(); paintEditor(); };
   bind('[data-target]', b => b.onclick = () => { S.target = b.dataset.target; paintEditor(); paintTarget(); });
@@ -447,6 +516,7 @@ function srcForm(s) {
   });
 }
 $('#addsrc').onclick = () => srcForm(null);
+$('#theme').onchange = async e => { try { await api('/api/theme', {theme: e.target.value}); say('Guide look saved. It shows the next time the guide is opened on the TV.', 4000); } catch (err) { say('Failed: ' + err.message); } };
 
 function paint() { paintChannels(); paintTarget(); paintEditor(); }
 
@@ -465,7 +535,8 @@ function starter() {
 }
 async function load() {
   const j = await api('/api/state');
-  S.groups = j.groups; S.stats = j.stats; S.sources = j.sources; S.device = j.device;
+  S.groups = j.groups; S.stats = j.stats; S.sources = j.sources; S.device = j.device; S.logos = j.logos || [];
+  $('#theme').innerHTML = (j.themes || []).map(t => `<option value="${t[0]}" ${t[0] === j.theme ? 'selected' : ''}>${esc(t[1])}</option>`).join('');
   if (j.device) { $('#push').textContent = 'Apply to TV'; $('#push').title = 'Build the channels; the TV switches over in a few seconds'; $('#stop').style.display = 'none'; }
   if (!S.loaded) { S.spec = j.spec; S.loaded = true; }
   $('#catinfo').textContent = j.sources.reduce((n, x) => n + x.items, 0) + ' items from ' + j.sources.length + ' source' + (j.sources.length === 1 ? '' : 's') + (j.hidden_items ? ', ' + j.hidden_items + ' hidden' : '');

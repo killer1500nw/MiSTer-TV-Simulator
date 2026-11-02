@@ -39,7 +39,7 @@ def pool_items(catalog, groups, spec, hidden=frozenset()):
     return out
 
 
-def compile_channel(spec, catalog, groups, hidden=frozenset()):
+def compile_channel(spec, catalog, groups, hidden=frozenset(), logos=None):
     """-> (Channel, {pool name: ids})"""
     today = dt.date.today().isoformat()
     pools, resolved = [], {}
@@ -59,7 +59,23 @@ def compile_channel(spec, catalog, groups, hidden=frozenset()):
                  commercial_pool=ADS if ad_ids else None, slot_minutes=int(spec.get('slot_minutes', 30)),
                  no_repeat_hours=int(spec.get('no_repeat_hours', 12)),
                  max_break_minutes=int(spec.get('max_break_minutes', 15)), anchor=spec.get('anchor') or today)
+    meta = logo_meta(spec.get('logo') or {}, ch.number, (logos or {}).get(ch.number))
+    if meta:
+        ch.meta['logo'] = meta
     return ch, resolved
+
+
+def logo_meta(setting, number, sizes):
+    """What the player needs to draw a channel logo, or None. `sizes` = {size name: (w, h)} of the uploaded logo."""
+    if not sizes or setting.get('mode') not in ('always', 'timed'):
+        return None
+    size = setting.get('size') if setting.get('size') in sizes else sorted(sizes)[0]
+    w, h = sizes[size]
+    seconds = max(1, min(120, int(setting.get('seconds') or 8)))
+    opacity = max(5, min(100, int(setting.get('opacity') or 100)))
+    return {'mode': setting['mode'], 'seconds': seconds, 'size': size,
+            'grey': bool(setting.get('grey')), 'opacity': opacity,
+            'file': 'logos/ch%d.bgra' % number, 'w': int(w), 'h': int(h)}
 
 
 def pool_stats(catalog, ids):
@@ -68,11 +84,11 @@ def pool_stats(catalog, ids):
             'direct': sum(1 for i in items if i['direct_ok'])}
 
 
-def compile_all(spec, catalog, groups, hidden=frozenset()):
+def compile_all(spec, catalog, groups, hidden=frozenset(), logos=None):
     """-> (channels, runtime items [dict], stats {channel number: {pool: stats}})"""
     channels, used, stats = [], set(), {}
     for cs in spec.get('channels', []):
-        ch, resolved = compile_channel(cs, catalog, groups, hidden)
+        ch, resolved = compile_channel(cs, catalog, groups, hidden, logos)
         stats[ch.number] = {n: pool_stats(catalog, ids) for n, ids in resolved.items()}
         if not any(ids for name, ids in resolved.items() if name != ADS):
             continue                                       # nothing to show: leave it out rather than play station idents all day

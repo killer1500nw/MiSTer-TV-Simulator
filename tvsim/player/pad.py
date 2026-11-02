@@ -1,15 +1,16 @@
 """Gamepad and keyboard as the H.264 core passes them on (its input region), turned into remote-control actions.
 
-Actions: up down left right ok back menu guide pgup pgdn, and 'digit:N'.
+Actions: up down left right ok back menu info guide pgup pgdn, and 'digit:N'.
 """
 
-# controller bits as MiSTer's main program sends them: 0-3 = right, left, down, up, then A B X Y L R Select Start
-JOY_BITS = {0: 'right', 1: 'left', 2: 'down', 3: 'up', 4: 'ok', 5: 'back', 6: 'guide', 7: 'menu',
+# controller bits as MiSTer's main program sends them: 0-3 = right, left, down, up, then A B Y X L R Select Start
+# (bits 6 and 7 are swapped from the usual X, Y order: on the author's pad the buttons labelled X and Y arrive that way round)
+JOY_BITS = {0: 'right', 1: 'left', 2: 'down', 3: 'up', 4: 'ok', 5: 'back', 6: 'info', 7: 'guide',
             8: 'pgup', 9: 'pgdn', 10: 'guide', 11: 'menu'}
 # PS/2 set-2 make codes as (extended, code)
 PS2 = {(1, 0x75): 'up', (1, 0x72): 'down', (1, 0x6B): 'left', (1, 0x74): 'right',
        (0, 0x5A): 'ok', (1, 0x5A): 'ok', (0, 0x29): 'ok', (0, 0x76): 'back', (0, 0x66): 'back',
-       (0, 0x34): 'guide', (0, 0x0D): 'guide', (0, 0x3A): 'menu', (0, 0x1A): 'menu', (1, 0x7D): 'pgup', (1, 0x7A): 'pgdn',
+       (0, 0x34): 'guide', (0, 0x0D): 'guide', (0, 0x3A): 'menu', (0, 0x1A): 'menu', (0, 0x43): 'info', (1, 0x7D): 'pgup', (1, 0x7A): 'pgdn',
        (0, 0x49): 'up', (0, 0x41): 'down'}          # '.' and ',' as channel up / down
 for _code, _digit in ((0x45, 0), (0x16, 1), (0x1E, 2), (0x26, 3), (0x25, 4), (0x2E, 5), (0x36, 6), (0x3D, 7),
                       (0x3E, 8), (0x46, 9), (0x70, 0), (0x69, 1), (0x72, 2), (0x7A, 3), (0x6B, 4), (0x73, 5),

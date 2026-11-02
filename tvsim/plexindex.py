@@ -51,6 +51,7 @@ def item_record(meta, slug):
         'episode': meta.get('index') or 0,
         'year': meta.get('year'),
         'rating': meta.get('contentRating'),
+        'overview': (meta.get('summary') or '')[:420],
         'direct_ok': ok, 'why': why, 'media': key, 'unchecked': unchecked,
         'video': {'Codec': media.get('videoCodec'), 'Profile': media.get('videoProfile'), 'Width': media.get('width'),
                   'Height': media.get('height'), 'RealFrameRate': parse_rate(media.get('videoFrameRate'))[0],
