@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiSTer 90s TV Simulator - Studio</title>
+<style>
+:root { --bg:#0b0b2a; --panel:#14144a; --panel2:#1c1c66; --line:#3a3aa0; --text:#f2f2ff; --dim:#9a9ad0; --yellow:#ffe000; --cyan:#60e0ff; --red:#ff5a5a; --green:#6ee08a; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 "Trebuchet MS", Verdana, sans-serif; }
+header { background:linear-gradient(#2020a0,#101070); border-bottom:3px solid var(--cyan); padding:10px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+header h1 { margin:0; font-size:18px; color:var(--yellow); letter-spacing:1px; text-transform:uppercase; }
+header .sub { color:var(--cyan); font-size:12px; }
+header .grow { flex:1; }
+button, select, input { font:inherit; color:var(--text); background:var(--panel2); border:1px solid var(--line); border-radius:4px; padding:5px 9px; }
+input[type=checkbox] { padding:0; }
+button { cursor:pointer; } button:hover { border-color:var(--cyan); }
+button.primary { background:#2a58d8; border-color:var(--cyan); font-weight:bold; }
+button.danger:hover { border-color:var(--red); color:var(--red); }
+button.small { padding:2px 7px; font-size:12px; }
+main { display:grid; grid-template-columns:210px minmax(0,1fr) 360px; gap:12px; padding:12px; align-items:start; }
+@media (max-width:1000px) { main { grid-template-columns:1fr; } }
+section { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px; }
+h2 { margin:0 0 8px; font-size:13px; color:var(--cyan); text-transform:uppercase; letter-spacing:1px; }
+.chan { display:flex; gap:8px; padding:6px 8px; border-radius:4px; cursor:pointer; border:1px solid transparent; }
+.chan:hover { border-color:var(--line); } .chan.sel { background:var(--panel2); border-color:var(--cyan); }
+.chan b { color:var(--yellow); min-width:24px; }
+.row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
+.row label { color:var(--dim); font-size:12px; }
+.card { background:#10103a; border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin:8px 0; }
+.card.active { border-color:var(--yellow); }
+.chip { display:inline-flex; gap:6px; align-items:center; background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:1px 4px 1px 10px; margin:2px 4px 2px 0; font-size:12px; }
+.chip button { border:0; background:none; padding:0 4px; color:var(--dim); } .chip button:hover { color:var(--red); }
+.stat { color:var(--green); font-size:12px; } .warn { color:var(--yellow); }
+.dim { color:var(--dim); }
+.lib { max-height:70vh; overflow:auto; }
+.g { border-bottom:1px solid #26267a; padding:5px 2px; }
+.g .name { cursor:pointer; } .g .name:hover { color:var(--cyan); }
+.items { margin:4px 0 4px 12px; font-size:12px; }
+.items div { display:flex; gap:6px; justify-content:space-between; padding:1px 0; }
+table { border-collapse:collapse; width:100%; font-size:13px; }
+td { padding:2px 6px; border-bottom:1px solid #22226a; }
+tr.ad td { color:var(--dim); font-size:12px; } tr.prog td { background:#181860; } tr.prog td:first-child { color:var(--yellow); }
+.tag { font-size:11px; padding:0 5px; border-radius:3px; border:1px solid var(--line); } .tag.t { color:var(--yellow); border-color:#8a7a00; } .tag.d { color:var(--green); }
+#msg { position:fixed; left:0; right:0; bottom:0; background:#000a; padding:6px 16px; font-size:13px; white-space:pre-wrap; display:none; border-top:2px solid var(--cyan); }
+details summary { cursor:pointer; color:var(--cyan); }
+.settings { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+.tabs { display:flex; gap:4px; margin:8px 0; } .tab.sel { background:#2a58d8; border-color:var(--cyan); }
+.it { display:flex; gap:6px; justify-content:space-between; align-items:flex-start; padding:2px 0; border-bottom:1px solid #22226a; font-size:12px; }
+.it label { flex:1; cursor:pointer; } .hid { opacity:.5; }
+.selbar { position:sticky; bottom:0; display:none; gap:6px; align-items:center; flex-wrap:wrap; background:#0b0b2a; border:1px solid var(--yellow); border-radius:6px; padding:6px; margin-top:6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MiSTer 90s TV Simulator</h1><span class="sub">Studio</span><span class="grow"></span>
+  <span class="sub" id="catinfo"></span>
+  <button id="build" title="Write channels for the player (build folder)">Build</button>
+  <button id="push" class="primary" title="Build, copy to the MiSTer and start the player">Push to MiSTer</button>
+  <button id="stop" class="danger" title="Stop the player on the MiSTer and return to its menu">Stop MiSTer</button>
+</header>
+<main>
+  <section>
+    <h2>Channels</h2>
+    <div id="chanlist"></div>
+    <div class="row"><button id="newchan">+ New channel</button></div>
+    <h2 style="margin-top:14px">Sources</h2>
+    <div id="sources"></div>
+    <div class="row"><button id="addsrc">+ Add Jellyfin or Plex</button></div>
+    <div id="srcform" class="card" style="display:none"></div>
+  </section>
+  <section id="editor"></section>
+  <section>
+    <h2>Library</h2>
+    <div class="row"><label>Adding to</label><select id="target" style="max-width:230px"></select></div>
+    <div class="tabs"><button class="tab sel" data-tab="browse">Browse</button><button class="tab" data-tab="find">Find items</button><button class="tab" data-tab="lists">My lists</button></div>
+    <div id="tab-browse">
+      <div class="row">
+        <select id="gsrc"><option value="">All sources</option></select>
+        <select id="gtype"><option value="">All types</option><option value="library">Libraries</option><option value="series">Series</option><option value="playlist">Playlists</option><option value="collection">Collections</option><option value="list">My lists</option></select>
+        <input id="gq" placeholder="Search" style="flex:1;min-width:80px">
+      </div>
+      <div class="row"><label><input type="checkbox" id="gmerge"> merge same names</label><label><input type="checkbox" id="ghidden"> show hidden</label>
+        <button id="addall" class="small">Add all listed</button><span class="dim" id="gcount"></span></div>
+      <div class="lib" id="lib"></div>
+    </div>
+    <div id="tab-find" style="display:none">
+      <div class="row"><input id="fq" placeholder="Find episodes or films by title" style="flex:1"></div>
+      <div class="row"><label><input type="checkbox" id="fhidden"> show hidden</label><span class="dim" id="fcount"></span></div>
+      <div class="lib" id="found"></div>
+    </div>
+    <div id="tab-lists" style="display:none">
+      <div class="row"><input id="newlist" placeholder="New list name" style="flex:1"><button id="mklist">Create</button></div>
+      <p class="dim" style="margin:4px 0">Tick items in Browse or Find, then add them to a list. A list works like a playlist in a channel pool.</p>
+      <div class="lib" id="lists"></div>
+    </div>
+    <div id="selbar" class="selbar" style="display:none">
+      <b id="selcount"></b>
+      <button class="small" id="sel-pool">Add to pool</button>
+      <select id="sel-list"></select><button class="small" id="sel-addlist">Add to list</button>
+      <button class="small" id="sel-hide">Hide</button><button class="small" id="sel-unhide">Unhide</button>
+      <button class="small" id="sel-clear">Clear</button>
+    </div>
+  </section>
+</main>
+<div id="msg"></div>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const S = {groups: [], sources: [], spec: {channels: []}, stats: {}, sel: null, target: '', loaded: false};
+let saveTimer = null;
+
+function codeGet() { try { return localStorage.getItem('c90code') || ''; } catch (e) { return ''; } }
+function codeAsk(again) {
+  const c = prompt(again ? 'That code was not right. Type the 4 digits shown on your TV:' : 'Type the 4-digit code shown on your TV:');
+  if (c === null) throw new Error('A code is needed: it is shown on the TV.');
+  try { localStorage.setItem('c90code', c.trim()); } catch (e) { /* private window: asked again next time */ }
+}
+async function api(path, body) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const headers = {'X-Studio': '1', 'X-Studio-Code': codeGet()};
+    const opt = body === undefined ? {headers} : {method: 'POST', headers: Object.assign({'Content-Type': 'application/json'}, headers), body: JSON.stringify(body)};
+    const r = await fetch(path, opt);
+    const j = await r.json();
+    if (r.status === 401) { codeAsk(attempt > 0); continue; }
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    return j;
+  }
+  throw new Error('The code was not accepted.');
+}
+function say(text, ms) { const m = $('#msg'); m.textContent = text; m.style.display = text ? 'block' : 'none'; if (ms) setTimeout(() => { if (m.textContent === text) m.style.display = 'none'; }, ms); }
+function clock(sec) { const h = Math.floor(sec / 3600) % 24, m = Math.floor(sec / 60) % 60; return ((h % 12) || 12) + ':' + String(m).padStart(2, '0') + (h >= 12 ? 'P' : 'A'); }
+function hhmm(min) { return String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0'); }
+function parseHM(t) { const m = /^(\d{1,2}):(\d{2})$/.exec(t.trim()); return m ? Math.min(1440, +m[1] * 60 + +m[2]) : null; }
+function today() { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+const gname = id => (S.groups.find(g => g.id === id) || {name: '(missing) ' + id}).name;
+const chan = () => S.spec.channels.find(c => c.number === S.sel);
+
+function newFilters(ads) { return ads ? {max_min: 3, allow_transcode: false, contains: ''} : {min_min: 5, max_min: 130, allow_transcode: true, contains: ''}; }
+function newChannel(number, name) {
+  return {number, name, slot_minutes: 30, no_repeat_hours: 12, max_break_minutes: 15, anchor: today(),
+    pools: [{name: 'shows', mode: 'shuffle', groups: [], items: [], filters: newFilters(false)}],
+    commercials: {groups: [], items: [], filters: newFilters(true)}, dayparts: [{start: 0, end: 1440, pools: ['shows']}]};
+}
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try { const r = await api('/api/spec', S.spec); S.stats = r.stats; paintStats(); } catch (e) { say('Save failed: ' + e.message); }
+  }, 400);
+}
+
+function poolOf(c, key) { return key === '_ads' ? c.commercials : c.pools.find(p => p.name === key); }
+function addTo(kind, id) {
+  const c = chan(); if (!c) return say('Select a channel first.', 2500);
+  const p = poolOf(c, S.target) || c.pools[0]; if (!p) return say('This channel has no pool.', 2500);
+  const list = p[kind]; if (!list.includes(id)) list.push(id);
+}
+
+function paintChannels() {
+  $('#chanlist').innerHTML = S.spec.channels.slice().sort((a, b) => a.number - b.number).map(c =>
+    `<div class="chan ${c.number === S.sel ? 'sel' : ''}" data-n="${c.number}"><b>${c.number}</b><span>${esc(c.name)}</span></div>`).join('') || '<div class="dim">No channels yet.</div>';
+  document.querySelectorAll('.chan').forEach(e => e.onclick = () => { S.sel = +e.dataset.n; S.target = ''; paint(); });
+}
+function paintTarget() {
+  const c = chan(), sel = $('#target');
+  const opts = c ? c.pools.map(p => [p.name, 'Pool: ' + p.name]).concat([['_ads', 'Commercials']]) : [];
+  if (!opts.some(o => o[0] === S.target)) S.target = opts.length ? opts[0][0] : '';
+  sel.innerHTML = opts.map(o => `<option value="${esc(o[0])}" ${o[0] === S.target ? 'selected' : ''}>${esc(o[1])}</option>`).join('');
+}
+function filtersHTML(p, key) {
+  const f = p.filters || (p.filters = {});
+  return `<div class="row"><label>Length (min)</label><input data-f="${key}.min_min" type="number" min="0" style="width:64px" value="${f.min_min ?? ''}" placeholder="min">
+    <input data-f="${key}.max_min" type="number" min="0" style="width:64px" value="${f.max_min ?? ''}" placeholder="max">
+    <label>Title contains</label><input data-f="${key}.contains" style="width:150px" value="${esc(f.contains || '')}" placeholder="a, b">
+    <label><input type="checkbox" data-f="${key}.allow_transcode" ${f.allow_transcode !== false ? 'checked' : ''}> allow PC transcode</label></div>`;
+}
+function chips(p, key) {
+  return (p.groups || []).map((g, i) => `<span class="chip">${esc(gname(g))}<button data-rm="${key}.groups.${i}" title="Remove">x</button></span>`).join('')
+    + (p.items || []).map((g, i) => `<span class="chip">single item<button data-rm="${key}.items.${i}" title="Remove">x</button></span>`).join('')
+    || '<span class="dim">Nothing yet: pick from the library on the right.</span>';
+}
+function statLine(c, name) {
+  const s = (S.stats[c.number] || {})[name];
+  return `<span class="stat" data-stat="${esc(name)}">${s ? `${s.items} items, ${s.hours} h, ${s.direct} play directly, ${s.items - s.direct} need a PC transcode` : ''}</span>`;
+}
+function paintStats() {
+  const c = chan(); if (!c) return;
+  document.querySelectorAll('[data-stat]').forEach(e => {
+    const s = (S.stats[c.number] || {})[e.dataset.stat];
+    e.innerHTML = s ? `${s.items} items, ${s.hours} h, ${s.direct} play directly, ${s.items - s.direct} need a PC transcode` : '<span class="warn">no items</span>';
+  });
+}
+function paintEditor() {
+  const c = chan(), ed = $('#editor');
+  if (!c) { ed.innerHTML = `<h2>Channel</h2><p class="dim">Pick or create a channel.</p>${S.spec.channels.length ? '' : '<button id="starter" class="primary">Create starter channels</button>'}`;
+    if ($('#starter')) $('#starter').onclick = starter; return; }
+  const pools = c.pools.map((p, i) => `<div class="card ${S.target === p.name ? 'active' : ''}" data-pool="${esc(p.name)}">
+    <div class="row"><input data-pn="${i}" value="${esc(p.name)}" style="width:120px"><select data-pm="${i}"><option value="shuffle" ${p.mode === 'shuffle' ? 'selected' : ''}>Shuffle</option><option value="sequential" ${p.mode === 'sequential' ? 'selected' : ''}>In order (series continue)</option></select>
+    <button class="small" data-target="${esc(p.name)}">Add library items here</button><button class="small danger" data-delpool="${i}">Delete pool</button></div>
+    <div>${chips(p, 'p' + i)}</div>${filtersHTML(p, 'p' + i)}<div>${statLine(c, p.name)}</div></div>`).join('');
+  const ads = `<div class="card ${S.target === '_ads' ? 'active' : ''}"><div class="row"><b>Commercials</b><span class="dim">fill the free time after a programme (to the next ${c.slot_minutes}-minute mark), never more than ${c.max_break_minutes ?? 15} min</span>
+    <button class="small" data-target="_ads">Add library items here</button></div><div>${chips(c.commercials, 'ads')}</div>${filtersHTML(c.commercials, 'ads')}<div>${statLine(c, '_ads')}</div></div>`;
+  const dps = c.dayparts.map((d, i) => `<div class="row" data-dp="${i}"><input data-ds="${i}" value="${hhmm(d.start)}" style="width:64px"> to <input data-de="${i}" value="${hhmm(d.end)}" style="width:64px">
+    ${c.pools.map(p => `<label><input type="checkbox" data-dpool="${i}|${esc(p.name)}" ${d.pools.includes(p.name) ? 'checked' : ''}> ${esc(p.name)}</label>`).join('')}
+    <button class="small danger" data-deldp="${i}">x</button></div>`).join('');
+  ed.innerHTML = `<h2>Channel ${c.number}</h2>
+    <div class="row"><label>Number</label><input id="e-num" type="number" min="1" max="999" style="width:70px" value="${c.number}">
+    <label>Name</label><input id="e-name" value="${esc(c.name)}" style="width:200px">
+    <label>Programme slot (min)</label><input id="e-slot" type="number" min="10" step="5" style="width:70px" value="${c.slot_minutes}">
+    <label>No repeat (hours)</label><input id="e-rep" type="number" min="0" style="width:70px" value="${c.no_repeat_hours}">
+    <label>Longest ad break (min)</label><input id="e-brk" type="number" min="0" style="width:70px" value="${c.max_break_minutes ?? 15}">
+    <button class="danger small" id="e-del">Delete channel</button></div>
+    <h2>Programme pools</h2>${pools}<div class="row"><button id="addpool">+ Add pool</button></div>
+    <h2>Ad breaks</h2>${ads}
+    <h2>Day parts (which pool plays when)</h2>${dps}<div class="row"><button id="adddp">+ Add day part</button></div>
+    <h2>Preview</h2><div class="row"><input id="pv-date" type="date" value="${today()}"><button id="pv">Show schedule</button></div><div id="pv-out"></div>`;
+  wireEditor(c);
+}
+function wireEditor(c) {
+  const bind = (sel, fn) => document.querySelectorAll(sel).forEach(fn);
+  $('#e-num').onchange = e => { const n = +e.target.value; if (S.spec.channels.some(x => x !== c && x.number === n)) { e.target.value = c.number; return say('That number is taken.', 2500); } c.number = n; S.sel = n; save(); paint(); };
+  $('#e-name').oninput = e => { c.name = e.target.value; save(); paintChannels(); };
+  $('#e-slot').onchange = e => { c.slot_minutes = Math.max(10, +e.target.value || 30); save(); paintEditor(); };
+  $('#e-brk').onchange = e => { c.max_break_minutes = Math.max(0, +e.target.value || 0); save(); };
+  $('#e-rep').onchange = e => { c.no_repeat_hours = +e.target.value || 0; save(); };
+  $('#e-del').onclick = () => { if (confirm('Delete channel ' + c.number + '?')) { S.spec.channels = S.spec.channels.filter(x => x !== c); S.sel = null; save(); paint(); } };
+  $('#addpool').onclick = () => { let n = 'pool' + (c.pools.length + 1); c.pools.push({name: n, mode: 'shuffle', groups: [], items: [], filters: newFilters(false)}); S.target = n; save(); paint(); };
+  $('#adddp').onclick = () => { c.dayparts.push({start: 0, end: 1440, pools: c.pools.slice(0, 1).map(p => p.name)}); save(); paintEditor(); };
+  bind('[data-target]', b => b.onclick = () => { S.target = b.dataset.target; paintEditor(); paintTarget(); });
+  bind('[data-delpool]', b => b.onclick = () => { const p = c.pools[+b.dataset.delpool]; c.pools.splice(+b.dataset.delpool, 1); c.dayparts.forEach(d => d.pools = d.pools.filter(n => n !== p.name)); save(); paint(); });
+  bind('[data-pn]', i => i.onchange = () => { const p = c.pools[+i.dataset.pn], old = p.name; p.name = i.value.trim() || old; c.dayparts.forEach(d => d.pools = d.pools.map(n => n === old ? p.name : n)); S.target = p.name; save(); paint(); });
+  bind('[data-pm]', s => s.onchange = () => { c.pools[+s.dataset.pm].mode = s.value; save(); });
+  bind('[data-rm]', b => b.onclick = () => { const [k, list, i] = b.dataset.rm.split('.'); const p = k === 'ads' ? c.commercials : c.pools[+k.slice(1)]; p[list].splice(+i, 1); save(); paintEditor(); });
+  bind('[data-f]', i => i.onchange = () => {
+    const [k, field] = i.dataset.f.split('.'); const p = k === 'ads' ? c.commercials : c.pools[+k.slice(1)];
+    p.filters = p.filters || {}; if (i.type === 'checkbox') p.filters[field] = i.checked; else if (field === 'contains') p.filters[field] = i.value; else if (i.value === '') delete p.filters[field]; else p.filters[field] = +i.value;
+    save();
+  });
+  bind('[data-ds]', i => i.onchange = () => { const v = parseHM(i.value); if (v !== null) c.dayparts[+i.dataset.ds].start = v; i.value = hhmm(c.dayparts[+i.dataset.ds].start); save(); });
+  bind('[data-de]', i => i.onchange = () => { const v = parseHM(i.value); if (v !== null) c.dayparts[+i.dataset.de].end = v; i.value = hhmm(c.dayparts[+i.dataset.de].end); save(); });
+  bind('[data-dpool]', i => i.onchange = () => { const [k, n] = i.dataset.dpool.split('|'); const d = c.dayparts[+k]; d.pools = d.pools.filter(x => x !== n); if (i.checked) d.pools.push(n); save(); });
+  bind('[data-deldp]', b => b.onclick = () => { c.dayparts.splice(+b.dataset.deldp, 1); save(); paintEditor(); });
+  $('#pv').onclick = async () => {
+    const out = $('#pv-out'); out.textContent = 'Working...';
+    try {
+      await api('/api/spec', S.spec);
+      const rows = await api(`/api/preview?channel=${c.number}&date=${$('#pv-date').value}`);
+      out.innerHTML = '<table>' + rows.map(r => {
+        const ad = r.ad || r.kind === 'filler';
+        const tag = r.kind === 'filler' ? '' : `<span class="tag ${r.direct ? 'd' : 't'}">${r.direct ? 'direct' : 'transcode'}</span>`;
+        return `<tr class="${ad ? 'ad' : 'prog'}"><td>${clock(r.start)}</td><td>${esc((r.kind === 'filler' ? 'Station ident' : r.title))}${r.show && r.kind === 'episode' ? ' <span class="dim">- ' + esc(r.show) + '</span>' : ''}</td><td>${tag}</td></tr>`;
+      }).join('') + '</table>';
+    } catch (e) { out.textContent = 'Preview failed: ' + e.message; }
+  };
+  paintStats();
+}
+
+// ---- library: browse, find, lists, selection -------------------------------------------------------------------------------
+const picked = new Set();                                   // item ids ticked in Browse / Find / Lists
+const srcName = id => (S.sources.find(s => s.id === id) || {name: id}).name;
+const multi = () => S.sources.length > 1;
+
+function itemRow(r, extra) {
+  return `<div class="it ${r.hidden ? 'hid' : ''}"><label><input type="checkbox" data-sel="${esc(r.id)}" ${picked.has(r.id) ? 'checked' : ''}> ${esc(r.title)}
+    <span class="dim">${r.show ? esc(r.show) + ' · ' : ''}${r.mins}m${r.direct ? '' : ' (transcode)'}${multi() ? ' · ' + esc(srcName(r.source)) : ''}${r.hidden ? ' · hidden' : ''}</span></label>
+    <span>${extra || ''}<button class="small" data-item="${esc(r.id)}" title="Add this item to the pool">+</button></span></div>`;
+}
+function wireItems(box, onRemove) {
+  box.querySelectorAll('[data-sel]').forEach(c => c.onchange = () => { c.checked ? picked.add(c.dataset.sel) : picked.delete(c.dataset.sel); paintSel(); });
+  box.querySelectorAll('[data-item]').forEach(b => b.onclick = () => { addTo('items', b.dataset.item); save(); paintEditor(); });
+  box.querySelectorAll('[data-unlist]').forEach(b => b.onclick = async () => { await onRemove(b.dataset.unlist); });
+}
+function paintSel() {
+  $('#selbar').style.display = picked.size ? 'flex' : 'none';
+  $('#selcount').textContent = picked.size + ' selected';
+  const lists = S.groups.filter(g => g.type === 'list');
+  $('#sel-list').innerHTML = lists.map(l => `<option value="${esc(l.id)}">${esc(l.name)}</option>`).join('') + '<option value="">(new list...)</option>';
+}
+async function libAction(body, msg) {
+  try { const r = await api('/api/library', body); await load(); if (msg) say(msg, 2500); return r.result; } catch (e) { say('Failed: ' + e.message); }
+}
+
+let listed = [];
+function groupsView() {
+  const src = $('#gsrc').value, type = $('#gtype').value, q = $('#gq').value.trim().toLowerCase(), hid = $('#ghidden').checked;
+  let gs = S.groups.filter(g => (!src || g.source === src) && (!type || g.type === type) && (!q || g.name.toLowerCase().includes(q)) && (hid || !g.hidden));
+  if (!$('#gmerge').checked) return gs.map(g => ({ids: [g.id], name: g.name, type: g.type, count: g.count, hours: g.hours, source: g.source, hidden: g.hidden, n: 1}));
+  const by = new Map();
+  gs.forEach(g => {
+    const k = g.type + '|' + g.source + '|' + g.name.toLowerCase();
+    const e = by.get(k) || {ids: [], name: g.name, type: g.type, count: 0, hours: 0, source: g.source, hidden: g.hidden, n: 0};
+    e.ids.push(g.id); e.count += g.count; e.hours = Math.round((e.hours + g.hours) * 10) / 10; e.n++; by.set(k, e);
+  });
+  return [...by.values()];
+}
+async function paintLib() {
+  const q = $('#gq').value.trim().toLowerCase(), hid = $('#ghidden').checked;
+  listed = groupsView();
+  const shown = listed.slice(0, 200);
+  $('#gcount').textContent = listed.length + ' groups' + (listed.length > 200 ? ' (first 200 shown)' : '');
+  $('#lib').innerHTML = shown.map((g, i) => `<div class="g ${g.hidden ? 'hid' : ''}"><div class="row" style="margin:0"><span class="name" data-open="${i}">${esc(g.name)}${g.n > 1 ? ' x' + g.n : ''}</span>
+    <span class="dim" style="flex:1">${g.count} · ${g.hours} h · ${g.type}${multi() && g.source ? ' · ' + esc(srcName(g.source)) : ''}</span>
+    <button class="small" data-add="${i}">+ add</button><button class="small" data-hide="${i}" title="${g.hidden ? 'Show this group again' : 'Hide this group from the library'}">${g.hidden ? 'unhide' : 'hide'}</button></div><div class="items" id="it${i}"></div></div>`).join('');
+  document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => { listed[+b.dataset.add].ids.forEach(id => addTo('groups', id)); save(); paintEditor(); });
+  document.querySelectorAll('[data-hide]').forEach(b => b.onclick = () => { const g = listed[+b.dataset.hide]; libAction({action: g.hidden ? 'unhide' : 'hide', group_ids: g.ids}); });
+  document.querySelectorAll('[data-open]').forEach(n => n.onclick = async () => {
+    const box = $('#it' + n.dataset.open); if (box.innerHTML) { box.innerHTML = ''; return; }
+    let rows = [];
+    for (const id of listed[+n.dataset.open].ids) rows = rows.concat(await api('/api/group?id=' + encodeURIComponent(id) + '&q=' + encodeURIComponent(q) + '&hidden=' + (hid ? 1 : 0)));
+    box.innerHTML = rows.slice(0, 100).map(r => itemRow(r)).join('') + (rows.length > 100 ? '<div class="dim">first 100 shown: refine with search</div>' : '');
+    wireItems(box);
+  });
+}
+let findTimer = null;
+async function paintFind() {
+  const q = $('#fq').value.trim();
+  if (q.length < 2) { $('#found').innerHTML = '<div class="dim">Type at least two letters.</div>'; $('#fcount').textContent = ''; return; }
+  const rows = await api('/api/search?q=' + encodeURIComponent(q) + '&source=' + encodeURIComponent($('#gsrc').value) + '&hidden=' + ($('#fhidden').checked ? 1 : 0));
+  $('#fcount').textContent = rows.length + (rows.length >= 150 ? '+' : '') + ' found';
+  $('#found').innerHTML = rows.map(r => itemRow(r)).join('') || '<div class="dim">Nothing found.</div>';
+  wireItems($('#found'));
+}
+function paintLists() {
+  const lists = S.groups.filter(g => g.type === 'list');
+  $('#lists').innerHTML = lists.map((l, i) => `<div class="g"><div class="row" style="margin:0"><span class="name" data-lopen="${i}">${esc(l.name)}</span><span class="dim" style="flex:1">${l.count} items · ${l.hours} h</span>
+    <button class="small" data-ladd="${i}">+ add</button><button class="small" data-lren="${i}">rename</button><button class="small danger" data-ldel="${i}">delete</button></div><div class="items" id="li${i}"></div></div>`).join('')
+    || '<div class="dim">No lists yet.</div>';
+  const open = async i => {
+    const box = $('#li' + i); const rows = await api('/api/group?id=' + encodeURIComponent(lists[i].id) + '&hidden=1');
+    box.innerHTML = rows.map(r => itemRow(r, `<button class="small danger" data-unlist="${esc(r.id)}" title="Remove from this list">x</button>`)).join('') || '<div class="dim">Empty.</div>';
+    wireItems(box, async id => { await libAction({action: 'list_remove', id: lists[i].id, item_ids: [id]}); });
+  };
+  document.querySelectorAll('[data-lopen]').forEach(n => n.onclick = () => { const box = $('#li' + n.dataset.lopen); box.innerHTML ? box.innerHTML = '' : open(+n.dataset.lopen); });
+  document.querySelectorAll('[data-ladd]').forEach(b => b.onclick = () => { addTo('groups', lists[+b.dataset.ladd].id); save(); paintEditor(); });
+  document.querySelectorAll('[data-lren]').forEach(b => b.onclick = () => { const l = lists[+b.dataset.lren], n = prompt('New name', l.name); if (n) libAction({action: 'list_rename', id: l.id, name: n}); });
+  document.querySelectorAll('[data-ldel]').forEach(b => b.onclick = () => { const l = lists[+b.dataset.ldel]; if (confirm('Delete the list "' + l.name + '"?')) libAction({action: 'list_delete', id: l.id}); });
+}
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('sel', x === t));
+  ['browse', 'find', 'lists'].forEach(n => $('#tab-' + n).style.display = n === t.dataset.tab ? '' : 'none');
+  if (t.dataset.tab === 'find') $('#fq').focus();
+});
+$('#gsrc').onchange = $('#gtype').onchange = $('#ghidden').onchange = $('#gmerge').onchange = paintLib;
+$('#gq').oninput = paintLib;
+$('#fq').oninput = () => { clearTimeout(findTimer); findTimer = setTimeout(paintFind, 250); };
+$('#fhidden').onchange = paintFind;
+$('#mklist').onclick = async () => { const n = $('#newlist').value.trim(); if (!n) return; await libAction({action: 'list_create', name: n, item_ids: [...picked]}, 'List created.'); $('#newlist').value = ''; picked.clear(); paintSel(); };
+$('#sel-pool').onclick = () => { picked.forEach(id => addTo('items', id)); save(); paintEditor(); say('Added ' + picked.size + ' items to ' + S.target, 2500); };
+$('#sel-addlist').onclick = async () => {
+  let id = $('#sel-list').value;
+  if (!id) { const n = prompt('Name of the new list'); if (!n) return; await libAction({action: 'list_create', name: n, item_ids: [...picked]}, 'List created.'); }
+  else await libAction({action: 'list_add', id, item_ids: [...picked]}, 'Added to the list.');
+  picked.clear(); paintSel(); paintLib();
+};
+$('#sel-hide').onclick = async () => { await libAction({action: 'hide', item_ids: [...picked]}, 'Hidden.'); picked.clear(); paintSel(); paintLib(); };
+$('#sel-unhide').onclick = async () => { await libAction({action: 'unhide', item_ids: [...picked]}, 'Shown again.'); picked.clear(); paintSel(); paintLib(); };
+$('#sel-clear').onclick = () => { picked.clear(); paintSel(); paintLib(); document.querySelectorAll('[data-sel]').forEach(c => c.checked = false); };
+
+// ---- sources: add, sign in, test, index, remove --------------------------------------------------------------------------------
+function paintSources() {
+  $('#sources').innerHTML = S.sources.map(s => `<div class="card" style="margin:4px 0"><b>${esc(s.name)}</b> <span class="tag">${s.type}</span>
+    <div class="dim" style="font-size:12px;word-break:break-all">${esc(s.server)}<br>${s.items} items${s.indexed ? ', indexed ' + esc(s.indexed.replace('T', ' ')) : ', not indexed yet'}${s.has_credential ? '' : ', <span class="warn">not signed in</span>'}</div>
+    <div class="row" style="margin:4px 0 0"><button class="small" data-stest="${s.id}">Test</button><button class="small" data-sindex="${s.id}">Index</button><button class="small" data-sedit="${s.id}">Edit</button><button class="small danger" data-sdel="${s.id}">Remove</button></div></div>`).join('')
+    || '<div class="dim">No sources yet: add your Jellyfin or Plex server.</div>';
+  $('#gsrc').innerHTML = '<option value="">All sources</option>' + S.sources.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
+  document.querySelectorAll('[data-stest]').forEach(b => b.onclick = () => act(b, 'Testing', async () => (await api('/api/source/test', {id: b.dataset.stest})).message));
+  document.querySelectorAll('[data-sindex]').forEach(b => b.onclick = () => act(b, 'Reading the library (can take a minute)', async () => { const r = await api('/api/source/index', {id: b.dataset.sindex}); await load(); return r.message; }));
+  document.querySelectorAll('[data-sedit]').forEach(b => b.onclick = () => srcForm(S.sources.find(s => s.id === b.dataset.sedit)));
+  document.querySelectorAll('[data-sdel]').forEach(b => b.onclick = async () => {
+    const s = S.sources.find(x => x.id === b.dataset.sdel);
+    if (!confirm('Remove "' + s.name + '"? Its library is dropped from Studio; channels using it will lose those items.')) return;
+    await api('/api/source/delete', {id: s.id}); await load(); say('Removed.', 2000);
+  });
+}
+let resuming = false;
+function pinFlag(set) {
+  try { if (set === true) localStorage.setItem('c90pin', '1'); else if (set === false) localStorage.removeItem('c90pin'); else return localStorage.getItem('c90pin') === '1'; } catch (e) { /* no storage: the page stays open instead */ }
+  return false;
+}
+async function plexResume() {
+  // Plex sign-in finishes on the server (the token never reaches this page), so it also finishes if the phone put this page to sleep
+  if (!pinFlag() || resuming || document.hidden) return;
+  resuming = true;
+  try {
+    const r = await api('/api/plex/pin_check', {});
+    if (r.state === 'signed_in') {
+      pinFlag(false); await load();
+      const s = S.sources.find(x => x.id === r.id);
+      if (s) { srcForm(s); $('#sf-find').click(); }
+      say('Signed in to Plex. Pick your server below.', 5000);
+    } else if (r.state === 'pending') say('Waiting for you to approve in Plex...');
+    else pinFlag(false);
+  } catch (e) { /* try again on the next tick */ } finally { resuming = false; }
+}
+setInterval(plexResume, 3000);
+document.addEventListener('visibilitychange', plexResume);
+window.addEventListener('focus', plexResume);
+
+function srcForm(s) {
+  const f = $('#srcform'), isNew = !s; s = s || {type: 'jellyfin', name: '', server: ''};
+  f.style.display = '';
+  const plex = () => $('#sf-type').value === 'plex';
+  f.innerHTML = `<div class="row"><label>Type</label><select id="sf-type" ${isNew ? '' : 'disabled'}><option value="jellyfin" ${s.type === 'jellyfin' ? 'selected' : ''}>Jellyfin</option><option value="plex" ${s.type === 'plex' ? 'selected' : ''}>Plex</option></select></div>
+    <div class="row"><input id="sf-name" placeholder="Name (shown in Studio)" value="${esc(s.name)}" style="width:100%"></div>
+    <div class="row"><input id="sf-server" placeholder="Address, e.g. http://192.168.1.10:8096" value="${esc(s.server)}" style="width:100%"></div>
+    ${S.device ? '<div class="dim" style="font-size:12px;margin-bottom:6px">This page runs on the MiSTer: use the server&#39;s network address (like 192.168.1.10), not localhost.</div>' : ''}
+    <div id="sf-jf"><div class="row"><input id="sf-key" type="password" placeholder="API key (blank keeps the saved one)" style="width:100%"></div>
+      <div class="dim" style="font-size:12px">or sign in once (the password is not kept):</div>
+      <div class="row"><input id="sf-user" placeholder="User name" style="width:46%"><input id="sf-pass" type="password" placeholder="Password" style="width:46%"></div>
+      <div class="row"><button class="small" id="sf-login">Sign in to get a key</button></div></div>
+    <div id="sf-px">
+      <div class="row">${s.has_credential ? '<b style="color:var(--green)">&#10003; Signed in to Plex</b>' : ''}<button class="small ${s.has_credential ? '' : 'primary'}" id="sf-pin">${s.has_credential ? 'Sign in again' : 'Sign in with Plex'}</button></div>
+      <div id="sf-pinmsg" class="dim" style="font-size:13px"></div>
+      <div class="row"><button class="small" id="sf-find">Find my servers</button></div><div id="sf-servers"></div>
+      <details><summary class="dim">Advanced: paste a token</summary><input id="sf-token" type="password" placeholder="Plex token" style="width:100%"></details></div>
+    <div class="row"><button class="primary" id="sf-save">Save and read library</button><button id="sf-cancel">Cancel</button></div>`;
+  const sync = () => { $('#sf-jf').style.display = plex() ? 'none' : ''; $('#sf-px').style.display = plex() ? '' : 'none'; };
+  sync(); $('#sf-type').onchange = sync;
+  $('#sf-cancel').onclick = () => { f.style.display = 'none'; };
+  $('#sf-login').onclick = e => act(e.target, 'Signing in', async () => {
+    const r = await api('/api/jellyfin/login', {server: $('#sf-server').value.trim(), username: $('#sf-user').value, password: $('#sf-pass').value});
+    $('#sf-key').value = r.token; $('#sf-pass').value = ''; return 'Signed in: a key was filled in. Now Save.';
+  });
+  $('#sf-pin').onclick = async () => {
+    try {
+      const p = await api('/api/plex/pin', {});
+      pinFlag(true);
+      $('#sf-pinmsg').innerHTML = `<a href="${esc(p.url)}" target="_blank" rel="noopener" style="color:var(--yellow);font-size:15px">Tap here to open Plex and approve (code ${esc(p.code)})</a><br>Then come back to this page: it carries on by itself.`;
+      window.open(p.url, '_blank');                          // a phone may block this: the link above always works
+    } catch (e) { say('Plex sign-in failed: ' + e.message); }
+  };
+  $('#sf-find').onclick = async () => {
+    if (!s.id) return say('Sign in with Plex first (or paste a token under Advanced and save).', 4000);
+    try {
+      const r = await api('/api/plex/servers', {id: s.id});
+      $('#sf-servers').innerHTML = r.servers.map(sv => sv.connections.map(c => `<div class="row"><button class="small" data-uri="${esc(c.uri)}" data-sname="${esc(sv.name)}" style="text-align:left">${esc(sv.name)}: ${esc(c.uri)}${c.local ? ' (local)' : ''}</button></div>`).join('')).join('') || '<div class="dim">No servers found on this account.</div>';
+      $('#sf-servers').querySelectorAll('[data-uri]').forEach(b => b.onclick = () => { $('#sf-server').value = b.dataset.uri; if (!$('#sf-name').value || $('#sf-name').value === 'Plex') $('#sf-name').value = b.dataset.sname; say('Address filled in. Now Save and read library.', 4000); });
+    } catch (e) { say('Could not list servers: ' + e.message); }
+  };
+  $('#sf-save').onclick = e => act(e.target, 'Saving and reading the library (can take a minute)', async () => {
+    const body = {id: s.id, type: $('#sf-type').value, name: $('#sf-name').value, server: $('#sf-server').value};
+    body[plex() ? 'token' : 'api_key'] = (plex() ? $('#sf-token') : $('#sf-key')).value;
+    const r = await api('/api/source/save', body);
+    $('#srcform').style.display = 'none';
+    const m = await api('/api/source/index', {id: r.id}); await load(); return m.message;
+  });
+}
+$('#addsrc').onclick = () => srcForm(null);
+
+function paint() { paintChannels(); paintTarget(); paintEditor(); }
+
+function starter() {
+  // One channel per big series in YOUR library (the biggest first), plus a movie night; ads are chosen by you afterwards.
+  const series = new Map();
+  S.groups.filter(g => g.type === 'series' && !g.hidden && g.count >= 5).forEach(g => {
+    const k = g.name.toLowerCase(); const e = series.get(k) || {name: g.name, ids: [], count: 0}; e.ids.push(g.id); e.count += g.count; series.set(k, e);
+  });
+  const top = [...series.values()].sort((a, b) => b.count - a.count).slice(0, 6);
+  const movies = S.groups.filter(g => g.type === 'library' && !g.hidden && /movie|film/i.test(g.name));
+  if (!top.length && !movies.length) return say('Add a source and let it index first: there is nothing to build channels from yet.', 5000);
+  const chans = top.map((t, i) => { const c = newChannel(i + 2, (t.name.length > 18 ? t.name.slice(0, 18) : t.name)); c.pools[0].groups = t.ids; c.pools[0].filters = {min_min: 5, max_min: 130, allow_transcode: true, contains: ''}; return c; });
+  if (movies.length) { const c = newChannel(top.length + 2, 'Movie Night'); c.slot_minutes = 30; c.pools[0].groups = movies.map(g => g.id); c.pools[0].filters = {min_min: 60, max_min: 240, allow_transcode: true, contains: ''}; chans.push(c); }
+  S.spec.channels = chans; S.sel = chans[0].number; save(); paint();
+}
+async function load() {
+  const j = await api('/api/state');
+  S.groups = j.groups; S.stats = j.stats; S.sources = j.sources; S.device = j.device;
+  if (j.device) { $('#push').textContent = 'Apply to TV'; $('#push').title = 'Build the channels; the TV switches over in a few seconds'; $('#stop').style.display = 'none'; }
+  if (!S.loaded) { S.spec = j.spec; S.loaded = true; }
+  $('#catinfo').textContent = j.sources.reduce((n, x) => n + x.items, 0) + ' items from ' + j.sources.length + ' source' + (j.sources.length === 1 ? '' : 's') + (j.hidden_items ? ', ' + j.hidden_items + ' hidden' : '');
+  if (S.sel === null && S.spec.channels.length) S.sel = S.spec.channels[0].number;
+  paint(); paintSources(); paintLib(); paintLists(); paintSel();
+}
+async function act(btn, label, fn) {
+  btn.disabled = true; say(label + '...');
+  try { say(await fn()); } catch (e) { say('Failed: ' + e.message); } finally { btn.disabled = false; }
+}
+$('#target').onchange = e => { S.target = e.target.value; paintEditor(); };
+$('#addall').onclick = () => { listed.forEach(g => addTo('groups', g.id)); save(); paintEditor(); say('Added ' + listed.length + ' to ' + S.target, 2500); };
+$('#newchan').onclick = () => { let n = 2; const used = new Set(S.spec.channels.map(c => c.number)); while (used.has(n)) n++; S.spec.channels.push(newChannel(n, 'New channel')); S.sel = n; save(); paint(); };
+$('#build').onclick = e => act(e.target, 'Building', async () => { const r = await api('/api/build', S.spec); return `Built ${r.channels} channels, ${r.items} items.` + (r.warn_local && r.warn_local.length ? ' Warning: ' + r.warn_local.join(', ') + ' uses localhost, which the MiSTer cannot reach. Edit the source and use the network address of the server.' : ''); });
+$('#push').onclick = e => act(e.target, S.device ? 'Applying' : 'Building and copying to the MiSTer', async () => (await api('/api/push', S.spec)).output || 'Done.');
+$('#stop').onclick = e => act(e.target, 'Stopping the player', async () => (await api('/api/stop', {})).output || 'Stopped; back at the MiSTer menu.');
+load().catch(e => say('Could not load: ' + e.message));
+</script>
+</body>
+</html>

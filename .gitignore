@@ -1,0 +1,19 @@
+# Personal data: sign-ins (API keys, Plex tokens), indexed libraries, your channels and lists. NEVER commit these.
+/studio/
+/build/
+/catalog.json
+/preview/
+*.log
+/studio_run.log
+/studio_err.log
+
+# Built or downloaded files (the release script rebuilds the installer; ffmpeg is downloaded by the installer)
+/release/
+/third_party/ffmpeg-*/
+
+# Machine-specific
+/tools/mister_host.txt
+__pycache__/
+*.pyc
+_*.py
+_mist/

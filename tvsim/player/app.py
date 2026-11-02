@@ -1,0 +1,651 @@
+"""The set-top box: tunes the scheduled channel on the H.264 core, with a channel banner, number entry and a guide."""
+import datetime as dt
+import glob
+import os
+import random
+import re
+import sys
+import time
+from pathlib import Path
+
+from .. import netinfo, streams
+from ..schedule import Scheduler
+from ..store import channels_from_json, items_from_catalog, load_json
+from . import h264feed, h264ring as hr
+from .aspect import AspectBook
+from .chain import ChainFeeder, Entry
+from .overlay import Overlay, rgb
+from .pad import Pad
+
+BANNER_SECONDS = 4.0
+DIGIT_WAIT = 1.6
+RBF = '_Other/H264'
+
+BLUE, DARK, MID = rgb(0, 0, 112), rgb(0, 0, 64), rgb(0, 0, 150)
+WHITE, YELLOW, CYAN, SEL = rgb(255, 255, 255), rgb(255, 224, 0), rgb(96, 224, 255), rgb(0, 112, 160)
+RED = rgb(150, 0, 0)
+BLACK = rgb(0, 0, 0)
+TUNING_MAX = 15.0            # seconds: the static never stays longer than this even if no picture arrives
+
+
+class Runtime:
+    """Where ffmpeg lives (the player's own folder on the card)."""
+
+    def __init__(self, ca=None):
+        found = sorted(glob.glob('/media/fat/MiSTer_90s_TV/ffmpeg-*-armhf-static/ffmpeg'))
+        if not found:
+            raise RuntimeError('No ffmpeg found in /media/fat/MiSTer_90s_TV (run the installer or tools/deploy_player.py).')
+        self.ffmpeg = Path(found[0])
+        # for https sources (a Plex plex.direct address): the CA list the installer put next to the program
+        self.ca = Path(ca) if ca and os.path.isfile(ca) else Path('/etc/ssl/cert.pem')
+
+
+def leave_to_menu(log):
+    """Hand the screen back to the MiSTer menu (nothing else is started)."""
+    try:
+        fd = os.open('/dev/MiSTer_cmd', os.O_WRONLY | os.O_NONBLOCK)
+        try:
+            os.write(fd, b'load_core /media/fat/menu.rbf' + bytes([10]))
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        log('Could not return to the MiSTer menu: %s' % exc)
+
+
+def clock_text(sec):
+    h, m = sec // 3600 % 24, sec // 60 % 60
+    return '%d:%02d%s' % (h % 12 or 12, m, 'P' if h >= 12 else 'A')
+
+
+def nice_title(item):
+    """A short on-screen title: the show name when the episode title does not already carry it."""
+    t = re.sub(r'[._]+', ' ', item.title).strip()
+    show = re.sub(r'\(.*?\)|\[.*?\]|season.*$', '', item.show, flags=re.I).strip()
+    first = show.split(' ')[0].lower() if show else ''
+    if item.kind != 'episode' or not first or first in t.lower() or item.show.lower().startswith(('season', 'extras')):
+        return t
+    return '%s: %s' % (show, t)
+
+
+def fit(s, n):
+    return s if len(s) <= n else s[:max(0, n - 1)] + '.'
+
+
+class App:
+    FILES = ('channels.json', 'runtime_catalog.json', 'config.json')
+
+    def __init__(self, folder, log):
+        self.log, self.folder = log, folder
+        self.channels, self.items, self.cfg, self.sched, self.aspects = [], {}, {}, None, None
+        self.aspect_msg, self.aspect_until = '', 0.0
+        self.stamp, self.seen_stamp, self.seen_at = None, None, 0.0
+        self.reload_pending = False
+        self.rt = None
+        self.idx = 0
+        self.setup = False
+        self.tuning, self.tuning_until, self.tuning_start = '', 0.0, 0.0
+        self.static_frames, self.static_i = [], 0
+        self.stop = self.quit = False
+        self.banner_until = 0.0
+        self.digits, self.digit_time = '', 0.0
+        self.guide_open, self.guide_sel, self.guide_shift = False, 0, 0
+        self.slate = None
+        self.exit_until = 0.0
+        self.dirty = True
+        self.last_poll = self.last_draw = 0.0
+        self.end_ts = 0.0
+        self.chain_on = False
+        self.slot_key = None
+        self.last_slot_check = 0.0
+        self.last_file_check = 0.0
+
+    def file_stamp(self):
+        out = []
+        for name in self.FILES:
+            try:
+                st = os.stat(os.path.join(self.folder, name))
+                out.append((st.st_mtime_ns, st.st_size))
+            except OSError:
+                out.append(None)
+        return tuple(out)
+
+    def load_data(self):
+        """(Re)read channels, catalog and config. -> False when they are missing or empty (set-up not done yet); keeps the old ones then."""
+        stamp = self.file_stamp()
+        try:
+            cfg = streams.normalize(load_json(os.path.join(self.folder, 'config.json')))
+            items = items_from_catalog(load_json(os.path.join(self.folder, 'runtime_catalog.json')))
+            channels = channels_from_json(load_json(os.path.join(self.folder, 'channels.json')))
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        if not channels:
+            return False
+        number = self.channels[self.idx].number if self.channels else None
+        self.cfg, self.items, self.channels = cfg, items, channels
+        self.sched = Scheduler(items)
+        self.aspects = AspectBook(os.path.join(self.folder, 'aspects.json'), cfg.get('aspect_default', 'Fit'))
+        self.idx = next((i for i, c in enumerate(channels) if c.number == number), 0)
+        self.stamp = self.seen_stamp = stamp
+        return True
+
+    def studio_lines(self):
+        """-> (address text, code text) to show on the TV for the web page."""
+        addr = netinfo.studio_address()
+        try:
+            code = load_json(os.path.join(self.folder, 'pairing.json')).get('code', '')
+        except (OSError, ValueError):
+            code = ''
+        return addr, code
+
+    # drawing -----------------------------------------------------------------------------------------------------------------
+    def span(self, ch, when):
+        """-> (title text, start s, end s) of the programme that holds `when`, ads included in its span."""
+        prog = self.sched.programme(ch, when)
+        block = [a for a in self.sched.day(ch, when.date()) if a.slot == prog.slot]
+        item = prog.item
+        title = nice_title(item)
+        return title, block[0].start, block[-1].end
+
+    def draw_banner(self, c, now):
+        ch = self.channels[self.idx]
+        title, start, end = self.span(ch, now)
+        c.rect(40, 322, 560, 112, BLUE)
+        c.rect(40, 322, 560, 4, CYAN)
+        head = '%02d  %s' % (ch.number, ch.name.upper())
+        c.text(56, 336, fit(head, 22), YELLOW, BLUE, 3)
+        c.text(56, 372, fit(title, 33), WHITE, BLUE, 2)
+        c.text(56, 400, '%s - %s' % (clock_text(start), clock_text(end)), CYAN, BLUE, 2)
+        t = clock_text(now.hour * 3600 + now.minute * 60)
+        c.text(600 - 16 - c.text_width(t), 400, t, WHITE, BLUE, 2)
+
+    def draw_digits(self, c):
+        c.rect(430, 40, 170, 56, BLUE)
+        c.text(446, 52, 'CH ' + self.digits.ljust(2, '_'), YELLOW, BLUE, 4)
+
+    def draw_guide(self, c, now):
+        c.rect(24, 24, 592, 432, DARK)
+        c.rect(24, 24, 592, 40, MID)
+        c.text(40, 32, 'TV GUIDE', YELLOW, MID, 3)
+        t = '%d/%d %s' % (now.month, now.day, clock_text(now.hour * 3600 + now.minute * 60))
+        c.text(600 - c.text_width(t), 40, t, WHITE, MID, 2)
+        base = now.replace(minute=now.minute - now.minute % 30, second=0, microsecond=0) + dt.timedelta(minutes=30 * self.guide_shift)
+        cols = [base, base + dt.timedelta(minutes=30)]
+        lx, cx, cw = 32, 192, 208
+        c.rect(24, 64, 592, 24, MID)
+        for i, when in enumerate(cols):
+            c.text(cx + i * cw + 4, 68, clock_text(when.hour * 3600 + when.minute * 60), CYAN, MID, 2)
+        n = len(self.channels)
+        top = max(0, min(self.guide_sel - 3, n - 8))
+        for r in range(min(8, n)):
+            i = top + r
+            ch = self.channels[i]
+            y = 92 + r * 40
+            bg = SEL if i == self.guide_sel else (BLUE if r % 2 == 0 else DARK)
+            c.rect(24, y, 592, 38, bg)
+            c.text(lx, y + 11, fit('%2d %s' % (ch.number, ch.name.upper()), 10), YELLOW if i == self.guide_sel else CYAN, bg, 2)
+            for k, when in enumerate(cols):
+                title, start, _ = self.span(ch, when)
+                prefix = '<' if start < when.hour * 3600 + when.minute * 60 else ''
+                c.rect(cx + k * cw - 4, y, 4, 38, DARK)
+                c.text(cx + k * cw + 4, y + 11, fit(prefix + title, 12), WHITE, bg, 2)
+
+    def draw_guide_footer(self, c):
+        addr, code = self.studio_lines()
+        if addr:
+            c.rect(24, 416, 592, 40, MID)
+            c.text(40, 424, fit("EDIT CHANNELS: %s" % addr, 70), CYAN, MID, 1)
+            c.text(40, 438, fit("CODE %s   Y: SHAPE   X: GUIDE" % (code or "----"), 70), WHITE, MID, 1)
+
+    def static_frame(self):
+        """A ready-made grey static picture (a handful are made once, so showing one costs a copy of the buffer, not 50 ms of work)."""
+        if not self.static_frames:
+            from .overlay import Canvas
+            maker = Canvas()
+            for _ in range(5):
+                maker.noise()
+                self.static_frames.append(bytes(maker.buf))
+        self.static_i += 1
+        return self.static_frames[self.static_i % len(self.static_frames)]
+
+    def draw_tuning(self, c):
+        c.buf[:] = self.static_frame()
+        c.rect(36, 36, 8 * 3 * len(self.tuning) + 24, 44, BLACK)
+        c.text(48, 44, self.tuning, YELLOW, BLACK, 3)
+
+    def draw_aspect(self, c):
+        c.rect(40, 36, 560, 64, BLUE)
+        c.rect(40, 36, 560, 4, CYAN)
+        head, _, rest = self.aspect_msg.partition(': ')
+        c.text(56, 48, fit('SHAPE  ' + head, 33), YELLOW, BLUE, 2)
+        c.text(56, 72, fit(rest, 33), WHITE, BLUE, 2)
+
+    def draw_setup(self, c):
+        addr, code = self.studio_lines()
+        c.rect(0, 0, 640, 480, BLUE)
+        c.rect(0, 150, 640, 4, CYAN)
+        c.text(320 - c.text_width('MISTER 90S TV', 4) // 2, 60, 'MISTER 90S TV', YELLOW, BLUE, 4)
+        c.text(320 - c.text_width('SIMULATOR', 4) // 2, 100, 'SIMULATOR', YELLOW, BLUE, 4)
+        c.text(48, 176, '1. On a phone or computer, open:', WHITE, BLUE, 2)
+        if addr:
+            c.text(320 - c.text_width(addr, 2) // 2, 208, addr, CYAN, BLUE, 2)
+        else:
+            c.text(48, 208, 'No network: connect Wi-Fi or a cable', CYAN, BLUE, 2)
+        c.text(48, 252, '2. When asked, type this code:', WHITE, BLUE, 2)
+        c.text(320 - c.text_width(code or '----', 5) // 2, 286, code or '----', YELLOW, BLUE, 5)
+        c.text(48, 350, '3. Add your Jellyfin or Plex server,', WHITE, BLUE, 2)
+        c.text(48, 374, '   build channels, press Apply to TV.', WHITE, BLUE, 2)
+        c.text(48, 428, 'Waiting for channels...   BACK twice: exit', CYAN, BLUE, 1)
+
+    def draw_slate(self, c):
+        title, sub = self.slate
+        c.rect(0, 0, 640, 480, BLUE)
+        c.rect(0, 200, 640, 4, CYAN)
+        c.text(320 - c.text_width(fit(title, 24), 3) // 2, 214, fit(title, 24), YELLOW, BLUE, 3)
+        c.text(320 - c.text_width(fit(sub, 36)) // 2, 262, fit(sub, 36), WHITE, BLUE, 2)
+
+    def render(self):
+        c, now = self.ov.canvas, dt.datetime.now()
+        mono = time.monotonic()
+        if self.banner_until and mono > self.banner_until:
+            self.banner_until = 0.0
+        if self.aspect_until and mono >= self.aspect_until:
+            self.aspect_until = 0.0
+        if self.digits and mono - self.digit_time > DIGIT_WAIT:
+            self.tune_digits()
+        if not self.tuning:
+            c.clear()                                     # (the static replaces the whole canvas anyway)
+        shown = False
+        if self.tuning:
+            self.draw_tuning(c)
+            shown = True
+        if self.slate:
+            self.draw_slate(c)
+            shown = True
+        if self.setup:
+            self.draw_setup(c)
+            shown = True
+        elif self.guide_open:
+            self.draw_guide(c, now)
+            self.draw_guide_footer(c)
+            shown = True
+        elif self.banner_until:
+            self.draw_banner(c, now)
+            shown = True
+        if self.digits:
+            self.draw_digits(c)
+            shown = True
+        if mono < self.aspect_until:
+            self.draw_aspect(c)
+            shown = True
+        if mono < self.exit_until:
+            c.rect(120, 420, 400, 36, RED)
+            c.text(136, 428, 'PRESS BACK AGAIN TO EXIT', WHITE, RED, 2)
+            shown = True
+        if shown:
+            if not self.ov.show():
+                return False                        # the core has not taken the last page yet: draw again soon
+        elif self.ov.shown is not None:
+            self.ov.hide()
+        return True
+
+    # input -------------------------------------------------------------------------------------------------------------------
+    def show_banner(self):
+        self.banner_until = time.monotonic() + BANNER_SECONDS
+        self.dirty = True
+
+    def change(self, delta=0, number=None):
+        if number is not None:
+            idx = next((i for i, c in enumerate(self.channels) if c.number == number), None)
+            if idx is None:
+                return
+        else:
+            idx = (self.idx + delta) % len(self.channels)
+        if idx != self.idx:
+            self.idx = idx
+            self.stop = True
+        self.slate = None
+        self.show_banner()
+
+    def tune_digits(self):
+        if self.digits:
+            self.change(number=int(self.digits))
+        self.digits = ''
+        self.dirty = True
+
+    def handle(self, a):
+        mono = time.monotonic()
+        if self.setup:                                  # only BACK works until there are channels
+            if a == 'back':
+                if mono < self.exit_until:
+                    self.quit = self.stop = True
+                else:
+                    self.exit_until = mono + 2.5
+                    self.dirty = True
+            return
+        if a.startswith('digit:'):
+            if len(self.digits) < 2:
+                self.digits += a[6:]
+            self.digit_time = mono
+            self.dirty = True
+            return
+        if self.digits and a == 'ok':
+            self.tune_digits()
+            return
+        if self.guide_open:
+            if a == 'up':
+                self.guide_sel = (self.guide_sel - 1) % len(self.channels)
+            elif a == 'down':
+                self.guide_sel = (self.guide_sel + 1) % len(self.channels)
+            elif a == 'left':
+                self.guide_shift = max(0, self.guide_shift - 1)
+            elif a == 'right':
+                self.guide_shift = min(24, self.guide_shift + 1)
+            elif a == 'ok':
+                self.guide_open = False
+                self.change(number=self.channels[self.guide_sel].number)
+            elif a in ('back', 'guide', 'menu'):
+                self.guide_open = False
+            self.dirty = True
+            return
+        if a in ('up', 'pgup'):
+            self.change(+1)
+        elif a in ('down', 'pgdn'):
+            self.change(-1)
+        elif a == 'ok':
+            if self.banner_until:
+                self.banner_until = 0.0
+            else:
+                self.show_banner()
+            self.dirty = True
+        elif a in ('menu', 'right'):
+            self.cycle_aspect(+1)
+        elif a == 'left':
+            self.cycle_aspect(-1)
+        elif a == 'guide':
+            self.guide_open, self.guide_sel, self.guide_shift = True, self.idx, 0
+            self.dirty = True
+        elif a == 'back':
+            if mono < self.exit_until:
+                self.quit = self.stop = True
+            else:
+                self.exit_until = mono + 2.5
+                self.dirty = True
+
+    def cycle_aspect(self, step):
+        """Next / previous picture shape for what is on now; the picture restarts (about a second) so it shows at once."""
+        ch = self.channels[self.idx]
+        airing, _ = self.sched.now(ch, dt.datetime.now())
+        if airing.item.kind == 'filler':
+            return
+        self.aspects.cycle(airing.item, step)
+        name, text = self.aspects.describe(airing.item)
+        self.aspect_msg, self.aspect_until = '%s: %s' % (name.upper(), text), time.monotonic() + 3.5
+        self.stop = True
+        self.dirty = True
+
+    def service(self):
+        """Called while waiting on video: read the remote, redraw, and say whether to stop the current stream."""
+        mono = time.monotonic()
+        if mono - self.last_poll >= 0.04:
+            self.last_poll = mono
+            for a in self.pad.poll():
+                self.handle(a)
+        due = ((self.banner_until and mono >= self.banner_until) or (self.aspect_until and mono >= self.aspect_until) or (self.digits and mono - self.digit_time > DIGIT_WAIT)
+               or (self.exit_until and mono >= self.exit_until))
+        if (self.dirty or due) and mono - self.last_draw >= (0.2 if self.tuning else 0.12):
+            self.last_draw = mono
+            if self.exit_until and mono >= self.exit_until:
+                self.exit_until = 0.0
+            self.dirty = not self.render()           # False from render: the core has not taken the last page yet
+        if self.tuning:
+            if mono > self.tuning_until or self.ring.status()['pictures_seen'] >= 2:
+                marks = getattr(getattr(self, 'feeder', None), 'marks', {})
+                self.log('  picture after %.1f s (first video data %.1f s, first sound data %.1f s)' % (
+                    mono - self.tuning_start, marks.get('video', -1), marks.get('sound', -1)))
+                self.tuning = ''
+            self.dirty = True                              # the static is redrawn every time
+        if mono - self.last_file_check >= 2.0 and not self.setup:
+            self.last_file_check = mono
+            stamp = self.file_stamp()
+            if stamp != self.seen_stamp:
+                self.seen_stamp, self.seen_at = stamp, mono                # changing: wait until it has been still for a moment
+            elif stamp != self.stamp and mono - self.seen_at >= 1.5:
+                self.reload_pending = self.stop = True
+        if self.chain_on and mono - self.last_slot_check >= 1.0:
+            self.last_slot_check = mono                  # a new programme started (by the clock): show its banner
+            ch = self.channels[self.idx]
+            key = self.programme_key(ch)
+            if key != self.slot_key:
+                self.slot_key = key
+                if not self.sched.is_ad(ch, self.sched.programme(ch, dt.datetime.now()).item):
+                    self.show_banner()
+        return self.stop or self.quit or time.time() >= self.end_ts
+
+    def audio_command(self, src, start_s):
+        """The feeder's audio command, but with -ss as an absolute time stamp: the feeder passes the video's first time stamp, and
+        ffmpeg would otherwise add the stream's own start time (Jellyfin's transcodes start at about 1.4 s) on top, so the sound
+        would come from about 1.4 s later than the picture."""
+        cmd = h264feed.audio_pcm_command(self.rt, src, start_s)
+        if '-ss' in cmd:
+            cmd[cmd.index('-ss'):cmd.index('-ss')] = ['-seek_timestamp', '1']
+        return cmd
+
+    # playing -----------------------------------------------------------------------------------------------------------------
+    def clip(self, item, offset, session):
+        """-> an Entry (ffmpeg command builders) for one library item."""
+        st = streams.stream(self.cfg, item, offset, session)
+        vsrc, asrc = {'url': st.video_url, 'headers': {}}, {'url': st.audio_url, 'headers': {}}
+
+        def vcmd(start_s):
+            if st.prepare:
+                st.prepare('v')
+            return h264feed.video_copy_command(self.rt, vsrc, start_s)
+
+        def acmd(start_s):
+            if st.prepare:
+                st.prepare('a')
+            return self.audio_command(asrc, start_s if st.audio_seekable else 0.0)
+        return Entry(item.title, vcmd, acmd, st.seek_s, crop=self.aspects.steps(item), audio_early=not st.audio_seekable)
+
+    def chain_entries(self, ch, now, off, horizon=75 * 60):
+        """The clips from now on (the current one from `off`, then ads and programmes in schedule order) for about `horizon` seconds.
+        Station idents have no media, so they are left out: the next clip simply follows."""
+        entries, total, first = [], 0, True
+        sec = now.hour * 3600 + now.minute * 60 + now.second
+        date = now.date()
+        for _ in range(3):
+            for a in self.sched.day(ch, date):
+                if date == now.date() and a.end <= sec:
+                    continue
+                if a.item.kind == 'filler' or a.item.duration <= 0:
+                    continue
+                o = off if first else 0
+                first = False
+                entries.append(self.clip(a.item, o, '%032x' % random.getrandbits(128)))
+                total += a.item.duration - o
+                if total >= horizon:
+                    return entries
+            date += dt.timedelta(days=1)
+        return entries
+
+    def play(self, ch, airing, off):
+        item = airing.item
+        self.ring.new_session()
+        try:
+            self.ring.request_settings(analog_aspect=2)      # the core stays on Letterbox; the crop modes trim the stream itself
+        except hr.RingError:
+            pass
+        self.chain_on = bool(self.cfg.get('chain', True))
+        self.tuning, self.tuning_start = 'CH %02d' % ch.number, time.monotonic()
+        self.tuning_until = self.tuning_start + TUNING_MAX
+        if self.chain_on:
+            entries = self.chain_entries(ch, dt.datetime.now(), off)
+            feeder = ChainFeeder(self.ring, entries, log=self.log)
+            self.end_ts = time.time() + 3 * 86400            # the chain ends by itself; a channel change or BACK stops it
+            self.slot_key = self.programme_key(ch)
+            self.log('ch %d: %s (%s, %s) at %ds, then %d more clips' % (
+                ch.number, item.title, item.kind, 'direct' if item.direct_ok else 'transcode', off, len(entries) - 1))
+        else:
+            e = self.clip(item, off, '%032x' % random.getrandbits(128))
+            feeder = h264feed.Feeder(self.ring, e.video_cmd, e.audio_cmd, log=self.log, duration_s=item.duration)
+            self.log('ch %d: %s (%s, %s) at %ds' % (ch.number, item.title, item.kind, 'direct' if item.direct_ok else 'transcode', off))
+        feeder.start(0.0 if self.chain_on else e.seek_s)
+        self.feeder = feeder
+        result = feeder.run(stop=self.service, tick=self.service)
+        self.chain_on = False
+        self.log('  -> %s (first picture time %s s; lead min/mean ms %s; written %s)' % (
+            result, None if feeder.first_pts is None else round(feeder.first_pts / 90000.0, 2), feeder.take_lead(), feeder.stats))
+
+    def programme_key(self, ch):
+        prog = self.sched.programme(ch, dt.datetime.now())
+        return (ch.number, prog.slot, prog.start, dt.date.today())
+
+    def wait_setup(self):
+        self.setup = True
+        self.dirty = True
+        self.log('no channels yet: showing the set-up screen')
+        last = 0.0
+        while not self.quit:
+            self.service()
+            if time.monotonic() - last > 1.5:
+                last = time.monotonic()
+                if self.load_data():
+                    break
+            time.sleep(0.05)
+        self.setup = False
+        self.dirty = True
+        self.log('channels found: %d' % len(self.channels))
+
+    def wait_slate(self, title, sub, until_ts):
+        self.slate = (title, sub)
+        self.dirty = True
+        self.end_ts = until_ts
+        while not self.service():
+            time.sleep(0.03)
+        self.slate = None
+        self.dirty = True
+
+    def open_core(self):
+        hr.launch_core(RBF)
+        self.ring, self.mem = hr.open_devmem()
+        end = time.monotonic() + 15.0
+        while True:                                # a core that has only just loaded takes a moment to start answering
+            try:
+                self.ring.alive(10.0)
+                break
+            except hr.RingError:
+                if time.monotonic() > end:
+                    raise
+                time.sleep(0.5)
+        self.ring.new_session()                    # the core shows overlays only inside a session, even with no video yet
+        self.ov = Overlay(self.ring, self.log)
+        self.ov.hide()
+        self.pad = Pad(self.ring)
+
+    def close_core(self):
+        for step in (lambda: self.ov.close(), lambda: self.ring.close(), lambda: self.ring.release(), lambda: self.mem.close()):
+            try:
+                step()
+            except Exception:
+                pass
+
+    def recover_core(self):
+        """The core stopped answering (it can wedge under load): load the menu, load the core again and carry on."""
+        self.log('the core does not answer: reloading it')
+        self.close_core()
+        leave_to_menu(self.log)
+        end = time.monotonic() + 12.0
+        while time.monotonic() < end and hr.core_name() == 'H264':      # wait until the menu has really replaced it
+            time.sleep(0.3)
+        time.sleep(1.0)
+        self.open_core()
+        self.dirty = True
+
+    def run(self):
+        self.rt = Runtime(os.path.join(self.folder, 'cacert.pem'))
+        failures, recoveries = 0, 0
+        self.open_core()
+        try:
+            self.static_frame()                        # make the static pictures now, not in the middle of the first channel change
+            if not self.load_data():
+                self.wait_setup()                      # nothing to play yet: show how to set it up from a browser
+            self.show_banner()
+            while not self.quit:
+                self.stop = False
+                if self.reload_pending:
+                    self.reload_pending = False
+                    if self.load_data():
+                        self.log('channels reloaded: %d channels' % len(self.channels))
+                    else:
+                        self.log('the new channel files could not be read; keeping the old ones')
+                        self.stamp = self.seen_stamp
+                    self.show_banner()
+                ch = self.channels[self.idx]
+                now = dt.datetime.now()
+                airing, off = self.sched.now(ch, now)
+                midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                self.end_ts = (midnight + dt.timedelta(seconds=airing.end)).timestamp()
+                item = airing.item
+                if not self.sched.is_ad(ch, item) and off < 8:
+                    self.show_banner()
+                try:
+                    if item.kind == 'filler' or off >= item.duration - 2:
+                        self.wait_slate(ch.name.upper(), 'Back in a moment' if item.kind == 'filler' else '', self.end_ts)
+                    else:
+                        self.play(ch, airing, off)
+                    failures = 0
+                except (hr.RingError, RuntimeError, OSError) as exc:
+                    failures += 1
+                    self.log('  FAILED: %s' % exc)
+                    if isinstance(exc, hr.RingError):
+                        recoveries += 1
+                        if recoveries > 4:
+                            raise
+                        self.recover_core()                # (a few times at most per run, then give up and leave to the menu)
+                        failures = 0
+                        continue
+                    if failures >= 5:
+                        raise
+                    self.wait_slate('NO SIGNAL', fit(item.title, 36), time.time() + 4)
+        finally:
+            self.close_core()
+
+
+def make_logger(path):
+    key = re.compile(r'api_key=[0-9A-Za-z]+')
+    try:
+        fh = open(path, 'a', encoding='utf-8')
+    except OSError:
+        fh = None
+
+    def log(msg):
+        line = '%s %s' % (time.strftime('%H:%M:%S'), key.sub('api_key=***', str(msg)))
+        print(line, flush=True)
+        if fh:
+            fh.write(line + '\n')
+            fh.flush()
+    return log
+
+
+def main(argv=None):
+    folder = (argv or sys.argv[1:] or ['/media/fat/Scripts/.config/MiSTer_90s_TV'])[0]
+    log = make_logger(os.path.join(folder, 'log.txt'))
+    log('MiSTer 90s TV Simulator starting')
+    try:
+        import faulthandler
+        import signal
+        faulthandler.register(signal.SIGUSR1, all_threads=True)       # kill -USR1 <pid>: where is it stuck? (written to the console output)
+    except (ImportError, AttributeError, ValueError):
+        pass
+    code = 0
+    try:
+        App(folder, log).run()
+    except KeyboardInterrupt:
+        log('Stopped.')
+    except Exception as exc:                      # the log is how a failure on the MiSTer gets diagnosed
+        import traceback
+        log('FATAL: %s' % exc)
+        log(traceback.format_exc())
+        code = 1
+    leave_to_menu(log)
+    return code
