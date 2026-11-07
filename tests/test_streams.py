@@ -23,12 +23,25 @@ class T(unittest.TestCase):
         self.assertIn('/Videos/abc/stream?', st.video_url)
         self.assertEqual(st.seek_s, 30.0)
         self.assertTrue(st.audio_seekable)
+        self.assertEqual(st.headers, {'Authorization': 'MediaBrowser Token="K"'})
+        self.assertNotIn('api_key', up.parse_qs(up.urlparse(st.video_url).query))
+
+    def test_jellyfin_transcode_uses_headers_and_server_offset(self):
+        st = streams.stream(CFG, Item('jf:abc', 't', 60, direct_ok=False), 12.5, 'sess')
+        q = up.parse_qs(up.urlparse(st.video_url).query)
+        self.assertEqual(st.video_url, st.audio_url)
+        self.assertEqual(st.headers, {'Authorization': 'MediaBrowser Token="K"'})
+        self.assertNotIn('api_key', q)
+        self.assertEqual(q['StartTimeTicks'], ['125000000'])
+        self.assertEqual(st.seek_s, 0.0)
+        self.assertTrue(st.audio_seekable)
 
     def test_plex_direct_uses_the_part(self):
         st = streams.stream(CFG, Item('plex:77', 't', 60, media='/library/parts/9/1/file.mkv'), 30, 's')
         self.assertTrue(st.video_url.startswith('http://p:32400/library/parts/9/1/file.mkv?X-Plex-Token=T'))
         self.assertEqual(st.seek_s, 30.0)
         self.assertIsNone(st.prepare)
+        self.assertEqual(st.headers, {})
 
     def test_plex_transcode_is_one_hls_session_with_a_decision_first(self):
         st = streams.stream(CFG, Item('plex:77', 't', 60, direct_ok=False), 125.7, 'sess')
@@ -41,6 +54,7 @@ class T(unittest.TestCase):
         self.assertIsNotNone(st.prepare)                                  # the decision request
         self.assertFalse(st.audio_seekable)
         self.assertEqual(st.seek_s, 0.0)
+        self.assertEqual(st.headers, {})
 
     def test_unknown_source(self):
         with self.assertRaises(RuntimeError):
