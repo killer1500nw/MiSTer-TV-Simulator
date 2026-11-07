@@ -24,11 +24,12 @@ def source_of(cfg, item):
 
 class Stream:
     """How to fetch one item: `video_url` / `audio_url` (they differ when a server would treat the audio request as the same
-    transcode session as the video one), `seek_s` for ffmpeg, `prepare(kind)` to call just before opening a url (or None),
-    and `audio_seekable`: False when the sound comes from a stream ffmpeg cannot seek into (it then starts where the picture does)."""
+    transcode session as the video one), `headers` for both requests, `seek_s` for ffmpeg, `prepare(kind)` to call just before
+    opening a url (or None), and `audio_seekable`: False when the sound comes from a stream ffmpeg cannot seek into."""
 
-    def __init__(self, video_url, audio_url, seek_s=0.0, prepare=None, audio_seekable=True):
+    def __init__(self, video_url, audio_url, seek_s=0.0, prepare=None, audio_seekable=True, headers=None):
         self.video_url, self.audio_url, self.seek_s, self.prepare, self.audio_seekable = video_url, audio_url, seek_s, prepare, audio_seekable
+        self.headers = headers if headers is not None else {}
 
 
 def stream(cfg, item, offset_s, session):
@@ -36,5 +37,5 @@ def stream(cfg, item, offset_s, session):
     if src['type'] == 'plex':
         v, a, seek, prepare = plexurl.stream(src, item, offset_s, session)
         return Stream(v, a, seek, prepare, audio_seekable=prepare is None)       # a Plex transcode is HLS: start it, do not seek in it
-    url, seek = jfurl.stream(src, item, offset_s, session)
-    return Stream(url, url, seek)
+    url, seek, headers = jfurl.stream(src, item, offset_s, session)
+    return Stream(url, url, seek, headers=headers)
