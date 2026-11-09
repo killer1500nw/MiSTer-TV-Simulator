@@ -12,7 +12,7 @@ class Jellyfin:
     def get(self, path, **params):
         q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
         req = urllib.request.Request('%s%s%s' % (self.base, path, '?' + q if q else ''),
-                                     headers={'X-Emby-Token': self.key})
+                                     headers={'Authorization': 'MediaBrowser Token="%s"' % self.key})
         with urllib.request.urlopen(req, timeout=self.timeout) as r:
             return json.load(r)
 
@@ -40,6 +40,6 @@ def authenticate(base, username, password, timeout=30):
     req = urllib.request.Request(
         base.rstrip('/') + '/Users/AuthenticateByName', data=body, method='POST',
         headers={'Content-Type': 'application/json',
-                 'X-Emby-Authorization': 'MediaBrowser Client="MiSTer 90s TV Simulator", Device="PC", DeviceId="mister-90s-tv-studio", Version="1.0"'})
+                 'Authorization': 'MediaBrowser Client="MiSTer 90s TV Simulator", Device="PC", DeviceId="mister-90s-tv-studio", Version="1.0"'})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)['AccessToken']

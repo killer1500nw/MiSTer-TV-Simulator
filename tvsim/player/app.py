@@ -595,7 +595,7 @@ class App:
     def clip(self, item, offset, session):
         """-> an Entry (ffmpeg command builders) for one library item."""
         st = streams.stream(self.cfg, item, offset, session)
-        vsrc, asrc = {'url': st.video_url, 'headers': {}}, {'url': st.audio_url, 'headers': {}}
+        vsrc, asrc = {'url': st.video_url, 'headers': st.headers}, {'url': st.audio_url, 'headers': st.headers}
 
         def vcmd(start_s):
             if st.prepare:
