@@ -37,6 +37,29 @@ class Daemon(unittest.TestCase):
         self.assertTrue(daemon.running(me, 'tvsim.studio'))
 
 
+    def test_the_youtube_player_is_found_by_its_command_line_and_held_then_released(self):
+        from unittest import mock
+        procs = [(10, ['python3', '/media/fat/Scripts/.config/YouTubeCRT/youtube_crt.py', '--daemon']), (11, ['python3', '-m', 'tvsim.studio']),
+                 (os.getpid(), ['python3', 'youtube_crt.py', '--daemon'])]
+        self.assertEqual(daemon.feeder_pids(procs), [10])
+        self.assertNotIn(os.getpid(), daemon.feeder_pids(procs))
+        sent = []
+        with mock.patch.object(daemon.os, 'kill', lambda pid, sig: sent.append((pid, sig))):
+            daemon.signal_all([10, 12], 19)
+            daemon.signal_all([10, 12], 18)
+        self.assertEqual(sent, [(10, 19), (12, 19), (10, 18), (12, 18)])
+
+
+    def test_a_stopped_youtube_player_is_started_again_through_its_own_launcher(self):
+        d = tempfile.mkdtemp()
+        script = os.path.join(d, 'youtube_crt.py')
+        launcher = os.path.join(d, 'youtube_crt_daemon.sh')
+        Path(launcher).write_text('#!/bin/bash' + chr(10))
+        self.assertEqual(daemon.restart_command(['python3', script, '--daemon']), ['bash', launcher])
+        os.unlink(launcher)
+        self.assertEqual(daemon.restart_command(['python3', script, '--daemon']), ['python3', script, '--daemon'])
+
+
 class Installer(unittest.TestCase):
     def setUp(self):
         self.fat = Path(tempfile.mkdtemp())

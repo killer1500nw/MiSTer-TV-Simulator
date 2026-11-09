@@ -2,7 +2,7 @@
 
 Turn a MiSTer into a 90s set-top box. It builds **live TV channels from your own Jellyfin and Plex libraries**: shows start on the half hour, ad breaks fill the gaps, a scrolling guide lists what's on, and changing channel goes through a burst of static. Point it at a CRT and press channel up. You start it like any other core: **Other → MiSTer 90s TV**.
 
-> **Version 0.7b (beta).** Tested on one MiSTer (analog CRT output), Jellyfin 10.11 and Plex 1.43. Expect rough edges and please report them.
+> **Version 0.7.1b (beta).** Tested on one MiSTer (analog CRT output), Jellyfin 10.11 and Plex 1.43; a user reports it also works with Jellyfin 12.4 and S-Video. Expect rough edges and please report them.
 
 | Channel banner | Guide (Satellite look) | Set-up screen |
 |---|---|---|
@@ -106,6 +106,10 @@ An item plays on the FPGA only if it is H.264 **Main or High**, 8-bit 4:2:0, pro
 - **Time zone:** if the schedule is hours off, the MiSTer's clock or time zone is wrong.
 - **Indexing while watching** can make the picture stutter on the MiSTer's slow processor. Do set-up while the TV is idle.
 - **Credentials** (API keys, Plex tokens) are stored in plain text in `Scripts/.config/MiSTer_90s_TV/studio/config.json` on the SD card. The web page never sends them back to the browser.
+
+## Using it with other H.264 programs (MisterZine Plex, YouTube players)
+
+They can share one SD card, and all three can be used one after another without a reboot. This program only starts when you choose **Other → MiSTer 90s TV**. If you then leave and open another core that uses the same decoder, the player notices within a second, stops without touching it, and never sends the MiSTer back to the menu over the other core. Its background starter uses well under 1% of the processor. If something misbehaves when you switch, please report it with `Scripts/.config/MiSTer_90s_TV/daemon.log` and `log.txt`.
 
 ## Troubleshooting
 

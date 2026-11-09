@@ -78,18 +78,31 @@ def fetch(url, dest, label=''):
 
 
 def stop_running():
-    """Stop a running copy (background starter, player and web page) so the upgrade starts clean; the starter is started again at the end."""
-    import subprocess
+    """Stop a running copy (background starter, player and web page) so the upgrade starts clean; the starter is started again at the end.
+    Only processes that are exactly `python -m tvsim.<ours>` are touched (read from /proc), never anything that merely mentions the name."""
+    mine = {'tvsim.player', 'tvsim.studio', 'tvsim.daemon'}
+    me = os.getpid()
     try:
-        out = subprocess.run(['ps'], capture_output=True, text=True).stdout
+        names = [n for n in os.listdir('/proc') if n.isdigit()]
     except OSError:
         return
-    for line in out.splitlines():
-        if ('tvsim.player' in line or 'tvsim.studio' in line or 'tvsim.daemon' in line) and 'grep' not in line:
-            try:
-                os.kill(int(line.split()[0]), 9)
-            except (ValueError, OSError):
-                pass
+    for name in names:
+        try:
+            with open('/proc/%s/cmdline' % name, 'rb') as f:
+                args = f.read().split(bytes([0]))
+            words = [a.decode('utf-8', 'replace') for a in args]
+            if '-m' in words and words.index('-m') + 1 < len(words) and words[words.index('-m') + 1] in mine and int(name) != me:
+                os.kill(int(name), 9)
+        except (OSError, ValueError):
+            continue
+    for name in names:                                  # an older starter may have left the YouTube player held still: let it go
+        try:
+            with open('/proc/%s/cmdline' % name, 'rb') as f:
+                text = f.read().replace(bytes([0]), b' ').decode('utf-8', 'replace')
+            if 'youtube_crt.py --daemon' in text:
+                os.kill(int(name), 18)                  # SIGCONT
+        except (OSError, ValueError):
+            continue
 
 
 def install_program(app):

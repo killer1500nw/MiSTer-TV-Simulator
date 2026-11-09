@@ -354,17 +354,51 @@ class Ring:
             pass
 
 
+LOCK_WAIT = 10.0                                   # how long to wait for another program to let go of the decoder before giving up
+
+
+def lock_holder_pid(locks_text, inode):
+    """The pid that holds a lock on `inode`, from the text of /proc/locks ('1: FLOCK  ADVISORY  WRITE 1379 00:1f:12345 0 EOF'), or 0."""
+    for line in locks_text.splitlines():
+        words = line.split()
+        if len(words) >= 6 and words[1] in ('FLOCK', 'POSIX') and words[5].split(':')[-1] == str(inode):
+            try:
+                return int(words[4])
+            except ValueError:
+                return 0
+    return 0
+
+
+def describe_holder(path):
+    """What is holding the lock on `path`, for the error message: its command line, or '' when that cannot be found out."""
+    try:
+        with open('/proc/locks', encoding='ascii', errors='replace') as f:
+            pid = lock_holder_pid(f.read(), os.stat(path).st_ino)
+        if pid and pid != os.getpid():
+            with open('/proc/%d/cmdline' % pid, 'rb') as f:
+                return ' '.join(a.decode('utf-8', 'replace') for a in f.read().split(bytes([0]))).strip()[:160]
+    except (OSError, ValueError):
+        pass
+    return ''
+
+
 class DevMem:
     """/dev/mem mapped uncached over the control block and the ring, plus the lock that keeps two programs from feeding the core."""
 
     def __init__(self):
         import fcntl                                   # (not on Windows: the tests never get here)
         self.lock_fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o666)
-        try:
-            fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(self.lock_fd)
-            raise RingError('Another program is feeding the core.')
+        end = time.monotonic() + LOCK_WAIT             # a program that is on its way out (another core was just chosen) gets a moment
+        while True:
+            try:
+                fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= end:
+                    who = describe_holder(LOCK_PATH)
+                    os.close(self.lock_fd)
+                    raise RingError('Another program is feeding the core%s.' % (' (%s)' % who if who else ''))
+                time.sleep(0.25)
         self.fd = os.open('/dev/mem', os.O_RDWR | os.O_SYNC)
         self.map = mmap.mmap(self.fd, REGION_LEN, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=CTRL_BYTE)
 

@@ -12,6 +12,7 @@ if [ "${1:-}" != "-y" ] && [ -t 0 ]; then
   case "$ANSWER" in y|Y|yes|YES) ;; *) echo "Cancelled."; exit 0;; esac
 fi
 for p in $(ps | grep -v grep | grep -E "tvsim.daemon|tvsim.player|tvsim.studio" | awk '{print $1}'); do kill -9 "$p" 2>/dev/null; done
+for p in $(ps | grep -v grep | grep -E "youtube_crt.py --daemon" | awk '{print $1}'); do kill -CONT "$p" 2>/dev/null; done   # (never leave the YouTube player held still)
 if [ -f /media/fat/linux/user-startup.sh ]; then
   sed -i '/# BEGIN MiSTer 90s TV Simulator/,/# END MiSTer 90s TV Simulator/d' /media/fat/linux/user-startup.sh
 fi

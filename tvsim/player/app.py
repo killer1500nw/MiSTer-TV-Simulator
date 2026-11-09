@@ -42,9 +42,13 @@ class Runtime:
 
 
 def leave_to_menu(log):
-    """Hand the screen back to the MiSTer menu (nothing else is started)."""
+    """Hand the screen back to the MiSTer menu (nothing else is started). Never while another core (Plex, YouTube...) has been loaded:
+    that would throw the user out of it."""
+    if hr.core_name() not in ('H264', 'MENU', ''):
+        log('another core is loaded (%s): not touching it' % hr.core_name())
+        return
     try:
-        fd = os.open('/dev/MiSTer_cmd', os.O_WRONLY | os.O_NONBLOCK)
+        fd = os.open('/dev/MiSTer_cmd', os.O_WRONLY | getattr(os, 'O_NONBLOCK', 0))
         try:
             os.write(fd, b'load_core /media/fat/menu.rbf' + bytes([10]))
         finally:
@@ -83,6 +87,8 @@ class App:
         self.reload_pending = False
         self.rt = None
         self.idx = 0
+        self.foreign, self.last_core_check, self.core_checks = False, 0.0, 0
+        self.menu_seconds, self.recovering = 0, False
         self.setup = False
         self.join = None                                   # the 'join another MiSTer' screen on the set-up page
         self.tuning, self.tuning_until, self.tuning_start = '', 0.0, 0.0
@@ -565,6 +571,13 @@ class App:
                 self.tuning = ''
                 self.arm_logo()
             self.dirty = True                              # the static is redrawn every time
+        if mono - self.last_core_check >= 1.0:
+            self.last_core_check = mono
+            self.core_checks += 1
+            self.menu_seconds = self.menu_seconds + 1 if hr.core_name() == 'MENU' and not self.recovering else 0
+            if self.core_taken_over(self.core_checks % 3 == 0) or self.menu_seconds >= 4:
+                self.foreign = self.quit = self.stop = True
+                self.log('the MiSTer left our core (now %s): stopping without touching it' % (hr.core_name() or '?'))
         if mono - self.last_file_check >= 2.0 and not self.setup:
             self.last_file_check = mono
             stamp = self.file_stamp()
@@ -704,7 +717,25 @@ class App:
         self.ov.hide()
         self.pad = Pad(self.ring)
 
+    def core_taken_over(self, deep):
+        """True when the MiSTer is now running some other core (Plex, YouTube...), so this player must stop and leave it alone. Cheap check
+        every second (the core's name); `deep` also confirms, when the starter launched us, that the H.264 core was loaded through our menu
+        entry and not another program's entry for the same core."""
+        name = hr.core_name()
+        if name not in ('H264', 'MENU', ''):
+            return True
+        if deep and name == 'H264' and os.environ.get('C90_GUARD'):
+            from .. import daemon
+            return not daemon.loaded_by_our_entry(daemon.processes())
+        return False
+
     def close_core(self):
+        if self.foreign:                                   # the core now belongs to another program: write nothing to it
+            try:
+                self.mem.close()
+            except Exception:
+                pass
+            return
         for step in (lambda: self.ov.close(), lambda: self.ring.close(), lambda: self.ring.release(), lambda: self.mem.close()):
             try:
                 step()
@@ -714,13 +745,17 @@ class App:
     def recover_core(self):
         """The core stopped answering (it can wedge under load): load the menu, load the core again and carry on."""
         self.log('the core does not answer: reloading it')
-        self.close_core()
-        leave_to_menu(self.log)
-        end = time.monotonic() + 12.0
-        while time.monotonic() < end and hr.core_name() == 'H264':      # wait until the menu has really replaced it
-            time.sleep(0.3)
-        time.sleep(1.0)
-        self.open_core()
+        self.recovering = True                             # (the menu is expected for a moment: that is not the user leaving)
+        try:
+            self.close_core()
+            leave_to_menu(self.log)
+            end = time.monotonic() + 12.0
+            while time.monotonic() < end and hr.core_name() == 'H264':      # wait until the menu has really replaced it
+                time.sleep(0.3)
+            time.sleep(1.0)
+            self.open_core()
+        finally:
+            self.recovering, self.menu_seconds = False, 0
         self.dirty = True
 
     def run(self):
@@ -803,8 +838,10 @@ def main(argv=None):
     except (ImportError, AttributeError, ValueError):
         pass
     code = 0
+    app = None
     try:
-        App(folder, log).run()
+        app = App(folder, log)
+        app.run()
     except KeyboardInterrupt:
         log('Stopped.')
     except Exception as exc:                      # the log is how a failure on the MiSTer gets diagnosed
@@ -812,5 +849,6 @@ def main(argv=None):
         log('FATAL: %s' % exc)
         log(traceback.format_exc())
         code = 1
-    leave_to_menu(log)
+    if not (app and app.foreign):
+        leave_to_menu(log)
     return code

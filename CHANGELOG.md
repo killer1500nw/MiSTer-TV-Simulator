@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1b (beta)
+
+- **Fix: Jellyfin 12.** Jellyfin 12 turns off the old ways of sending an API key, so Studio's connection test answered HTTP 401 even with a valid key. The Jellyfin connection, password sign-in and playback now send the key in the `Authorization` header, and playback links no longer carry the key in the web address. It still works with Jellyfin 10.11. Thanks to scr512 for the report, the fix and the testing (issue #1, pull request #2).
+- **Fix: the source repository was missing five small files** (`__init__.py` and `__main__.py` in `tvsim`, `tvsim/player` and `tvsim/studio`), so running Studio or the player from a fresh clone, or building the installer from one, did not work. Installer releases were not affected.
+- **Fix: our player no longer interferes with other H.264 cores.** If you left our core and opened another one that uses the same decoder (the MisterZine Plex core, the YouTube player), our player could keep running for a while, write to the decoder, and then send the MiSTer back to the menu, throwing you out of the other core. The player now stops at once without touching the core when another core is loaded, never sends "go to menu" over another core, and the background starter ends it as a backstop. While our core is open, a YouTube CRT player that is also running is now stopped and started again when you leave, instead of staying stopped until the next reboot, so the YouTube player, the MisterZine Plex core and this one can all be used one after another. If some other program still holds the decoder when the player starts, the player now waits up to 10 seconds for it to let go, and if it gives up, the log names the program that is in the way. The background starter also uses far less CPU (about 0.4%, down from about 4%).
+
 ## 0.7b (beta)
 
 - **Share channels between MiSTers.** On the first-run screen press A (or, in Studio, **Share with other MiSTers → Find other MiSTers**) to copy the channels, sign-ins and logos of another MiSTer in your home, using its four-digit code. The copy is kept up to date: every five minutes it asks the other MiSTer one small question and copies again only when something changed. Both then show the same programme at the same moment. Not yet tested on two real MiSTers.

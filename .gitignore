@@ -15,5 +15,6 @@
 /tools/mister_host.txt
 __pycache__/
 *.pyc
-_*.py
+# scratch files in the project root only (not __init__.py / __main__.py)
+/_*.py
 _mist/
