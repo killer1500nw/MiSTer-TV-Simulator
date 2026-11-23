@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2b (beta)
+
+- **Fix: the YouTube player could open by itself after you left our core.** If a video error happened just as you went back to the MiSTer menu, the player's self-recovery took the menu for a stuck core and reloaded the plain H.264 core, which the YouTube player (started again for you by our starter) then picked up and showed its own screen. The player now never recovers or reloads anything once the MiSTer has left our core, and when it does recover a stuck core it reloads it through Other > MiSTer 90s TV, so the starter keeps treating it as ours.
+- **Easier to diagnose.** The background starter now writes down what it sees and why it does or does not start the player (the core's name, whether it was loaded from Other > MiSTer 90s TV, and the files the MiSTer program was started with), once per change instead of staying silent. New **Scripts → MiSTer_90s_TV_Diagnose** and a **Diagnostics** button in Studio print one report of the version, the core and menu entry, what is running, the installed files, your sources (no keys) and the ends of the logs, with API keys, tokens and Studio's code removed. The installer now ends with a self-check (core, menu entry, start-up line, ffmpeg, starter, Studio) and keeps its output in `install.log`. The player's `log.txt` starts each run with its version and the core's name and no longer grows without limit. There is also a bug-report form on GitHub that asks for the diagnostics. (Prompted by issue #3, where only a test pattern showed and the logs could not say why.)
+
 ## 0.7.1b (beta)
 
 - **Fix: Jellyfin 12.** Jellyfin 12 turns off the old ways of sending an API key, so Studio's connection test answered HTTP 401 even with a valid key. The Jellyfin connection, password sign-in and playback now send the key in the `Authorization` header, and playback links no longer carry the key in the web address. It still works with Jellyfin 10.11. Thanks to scr512 for the report, the fix and the testing (issue #1, pull request #2).

@@ -41,6 +41,21 @@ class Runtime:
         self.ca = Path(ca) if ca and os.path.isfile(ca) else Path('/etc/ssl/cert.pem')
 
 
+def send_command(text):
+    """One line for the MiSTer program's command pipe."""
+    fd = os.open('/dev/MiSTer_cmd', os.O_WRONLY | os.O_NONBLOCK)
+    try:
+        os.write(fd, text.encode() + bytes([10]))
+    finally:
+        os.close(fd)
+
+
+def our_entry():
+    """The menu entry made by the installer (Other > MiSTer 90s TV), or None."""
+    found = sorted(glob.glob('/media/fat/_Other/MiSTer 90s TV_*.rbf'))
+    return found[-1] if found else None
+
+
 def leave_to_menu(log):
     """Hand the screen back to the MiSTer menu (nothing else is started). Never while another core (Plex, YouTube...) has been loaded:
     that would throw the user out of it."""
@@ -89,6 +104,7 @@ class App:
         self.idx = 0
         self.foreign, self.last_core_check, self.core_checks = False, 0.0, 0
         self.menu_seconds, self.recovering = 0, False
+        self.last_action = ('none', 0.0)                   # the last button pressed and when (for the log when the MiSTer leaves our core)
         self.setup = False
         self.join = None                                   # the 'join another MiSTer' screen on the set-up page
         self.tuning, self.tuning_until, self.tuning_start = '', 0.0, 0.0
@@ -468,6 +484,7 @@ class App:
 
     def handle(self, a):
         mono = time.monotonic()
+        self.last_action = (a, mono)
         if self.setup:                                  # only BACK works until there are channels (and A: join another MiSTer)
             if self.join:
                 self.handle_join(a)
@@ -577,7 +594,8 @@ class App:
             self.menu_seconds = self.menu_seconds + 1 if hr.core_name() == 'MENU' and not self.recovering else 0
             if self.core_taken_over(self.core_checks % 3 == 0) or self.menu_seconds >= 4:
                 self.foreign = self.quit = self.stop = True
-                self.log('the MiSTer left our core (now %s): stopping without touching it' % (hr.core_name() or '?'))
+                self.log('the MiSTer left our core (now %s) about %d s ago: stopping without touching it; last button: %s, %.0f s ago' % (
+                    hr.core_name() or '?', self.menu_seconds, self.last_action[0], mono - self.last_action[1] if self.last_action[1] else -1))
         if mono - self.last_file_check >= 2.0 and not self.setup:
             self.last_file_check = mono
             stamp = self.file_stamp()
@@ -700,8 +718,15 @@ class App:
         self.slate = None
         self.dirty = True
 
-    def open_core(self):
-        hr.launch_core(RBF)
+    def open_core(self, reload=False):
+        entry = our_entry() if reload and os.environ.get('C90_GUARD') else None
+        if entry:                                  # launched by the starter: load the core through our own menu entry, so it stays ours
+            send_command('load_core ' + entry)
+            end = time.monotonic() + 15.0
+            while time.monotonic() < end and hr.core_name() != 'H264':
+                time.sleep(0.3)
+        else:
+            hr.launch_core(RBF)
         self.ring, self.mem = hr.open_devmem()
         end = time.monotonic() + 15.0
         while True:                                # a core that has only just loaded takes a moment to start answering
@@ -729,6 +754,13 @@ class App:
             return not daemon.loaded_by_our_entry(daemon.processes())
         return False
 
+    def left_our_core(self):
+        """True when the MiSTer is no longer running our core: the menu or another core is showing, or the H.264 core was loaded by another
+        program's entry. Nothing may be written to, or reloaded over, a core that is not ours."""
+        if hr.core_name() != 'H264':
+            return True
+        return self.core_taken_over(True)
+
     def close_core(self):
         if self.foreign:                                   # the core now belongs to another program: write nothing to it
             try:
@@ -753,7 +785,7 @@ class App:
             while time.monotonic() < end and hr.core_name() == 'H264':      # wait until the menu has really replaced it
                 time.sleep(0.3)
             time.sleep(1.0)
-            self.open_core()
+            self.open_core(reload=True)
         finally:
             self.recovering, self.menu_seconds = False, 0
         self.dirty = True
@@ -797,6 +829,10 @@ class App:
                     failures += 1
                     self.log('  FAILED: %s' % exc)
                     if isinstance(exc, hr.RingError):
+                        if self.left_our_core():           # the user went to the menu (or another core): leave everything as it is
+                            self.foreign = self.quit = True
+                            self.log('the MiSTer left our core (now %s): stopping without touching it' % (hr.core_name() or '?'))
+                            break
                         recoveries += 1
                         if recoveries > 4:
                             raise
@@ -814,6 +850,11 @@ class App:
 def make_logger(path):
     key = re.compile(r'api_key=[0-9A-Za-z]+')
     try:
+        if os.path.getsize(path) > 1000000:                  # keep the log from growing for ever: the last 1 MB is log.old
+            os.replace(path, path + '.old')
+    except OSError:
+        pass
+    try:
         fh = open(path, 'a', encoding='utf-8')
     except OSError:
         fh = None
@@ -830,7 +871,8 @@ def make_logger(path):
 def main(argv=None):
     folder = (argv or sys.argv[1:] or ['/media/fat/Scripts/.config/MiSTer_90s_TV'])[0]
     log = make_logger(os.path.join(folder, 'log.txt'))
-    log('MiSTer 90s TV Simulator starting')
+    from .. import __version__
+    log('MiSTer 90s TV Simulator %s starting (Python %s, core %r)' % (__version__, sys.version.split()[0], hr.core_name()))
     try:
         import faulthandler
         import signal

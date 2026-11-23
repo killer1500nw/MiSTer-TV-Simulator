@@ -111,7 +111,7 @@ def install_program(app):
     app.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(app / 'tvsim', ignore_errors=True)
     shutil.copytree(HERE / 'tvsim', app / 'tvsim', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    for name in ('VERSION.txt', 'NOTICE.md', 'cacert.pem', 'CERTIFICATES-NOTICE.txt'):
+    for name in ('VERSION.txt', 'BUILD_DATE.txt', 'NOTICE.md', 'cacert.pem', 'CERTIFICATES-NOTICE.txt'):
         if (HERE / name).is_file():
             shutil.copy2(HERE / name, app / name)
 
@@ -175,8 +175,9 @@ STARTUP_LINE = 'case "${1:-start}" in start) ( bash /media/fat/Scripts/.config/M
 
 
 def install_scripts(app, scripts):
-    """The background starter goes beside the program; the only script left in the Scripts menu is the uninstaller."""
-    for src, target in (('MiSTer_90s_TV_daemon.sh', app / 'daemon.sh'), ('Uninstall_MiSTer_90s_TV.sh', scripts / 'Uninstall_MiSTer_90s_TV.sh')):
+    """The background starter goes beside the program; the Scripts menu gets the diagnostics report and the uninstaller."""
+    for src, target in (('MiSTer_90s_TV_daemon.sh', app / 'daemon.sh'), ('MiSTer_90s_TV_Diagnose.sh', scripts / 'MiSTer_90s_TV_Diagnose.sh'),
+                        ('Uninstall_MiSTer_90s_TV.sh', scripts / 'Uninstall_MiSTer_90s_TV.sh')):
         target.write_bytes((HERE / src).read_bytes().replace(b'\r\n', b'\n'))
         os.chmod(target, 0o755)
     old = scripts / 'MiSTer_90s_TV.sh'                  # versions before 0.6b put a launcher in the Scripts menu
@@ -241,7 +242,91 @@ def start_daemon(app):
                      start_new_session=True)
 
 
+def running_programs():
+    """The command lines of everything running (from /proc)."""
+    out = []
+    try:
+        for name in os.listdir('/proc'):
+            if name.isdigit():
+                try:
+                    with open('/proc/%s/cmdline' % name, 'rb') as f:
+                        out.append(f.read().replace(bytes([0]), b' ').decode('utf-8', 'replace'))
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+def self_check(fat, app):
+    """Say plainly what is in place and what is not, so that a problem shows in the install output (and install.log), not days later.
+    -> the number of things that need attention."""
+    import time
+    time.sleep(2.0)                                  # (the starter was only just started)
+    other = fat / '_Other'
+    cores = sorted(p.name for p in other.glob('H264_*.rbf'))
+    entries = sorted(p.name for p in other.glob(ENTRY_NAME + '_*.rbf'))
+    try:
+        startup_ok = BEGIN in (fat / 'linux' / 'user-startup.sh').read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        startup_ok = False
+    programs = running_programs()
+    ffmpeg = list((fat / 'MiSTer_90s_TV').glob('ffmpeg-*/ffmpeg'))
+    starter = any('tvsim.daemon' in p for p in programs)
+    studio = any('tvsim.studio' in p for p in programs)
+    rows = [
+        (bool(cores), 'H.264 core in _Other: ' + (', '.join(cores) or "MISSING. Install owenb321's core (Downloader works), then run this installer again.")),
+        (bool(entries), 'menu entry: ' + (('Other > %s' % ENTRY_NAME) if entries else 'MISSING (it is made from the H.264 core)')),
+        (startup_ok, 'start-up line in user-startup.sh: ' + ('present' if startup_ok else 'MISSING: the background starter will not start at boot')),
+        (bool(ffmpeg), 'ffmpeg: ' + ('installed' if ffmpeg else 'MISSING: run this installer again while online')),
+        (starter, 'background starter: ' + ('running' if starter else 'NOT running')),
+        (studio, 'Studio (web page): ' + ('running' if studio else 'not running yet (the starter starts it within seconds)')),
+    ]
+    print('\nSelf-check:')
+    for ok, text in rows:
+        print('  [%s] %s' % ('ok' if ok else '!!', text))
+    bad = sum(1 for ok, _ in rows if not ok)
+    if bad:
+        print('Something above needs attention. If it does not clear up, run Scripts > MiSTer_90s_TV_Diagnose and send its output with your report.')
+    return bad
+
+
+class Tee:
+    """Everything the installer prints is also kept, to be saved as install.log."""
+
+    def __init__(self, real):
+        self.real, self.lines = real, []
+
+    def write(self, text):
+        self.lines.append(text)
+        return self.real.write(text)
+
+    def flush(self):
+        self.real.flush()
+
+    def isatty(self):
+        return self.real.isatty()
+
+
 def main():
+    tee = Tee(sys.stdout)
+    sys.stdout = tee
+    try:
+        return run()
+    finally:
+        sys.stdout = tee.real
+        try:
+            import time
+            fat = Path(sys.argv[sys.argv.index('--fat') + 1]) if '--fat' in sys.argv else Path('/media/fat')
+            log = fat / 'Scripts' / '.config' / 'MiSTer_90s_TV' / 'install.log'
+            if log.parent.is_dir():
+                old = log.read_text(encoding='utf-8', errors='replace')[-20000:] if log.exists() else ''
+                log.write_text(old + '\n=== %s ===\n%s' % (time.strftime('%Y-%m-%d %H:%M:%S'), ''.join(tee.lines)), encoding='utf-8')
+        except OSError:
+            pass
+
+
+def run():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--fat', default='/media/fat', help='the MiSTer SD card (for testing elsewhere)')
     ap.add_argument('--no-download', action='store_true', help='skip the downloads (for testing the rest)')
@@ -262,6 +347,7 @@ def main():
     install_menu_entry(fat)               # (again after an update of the H.264 core, so that the entry carries the new core)
     boot = install_startup(fat, a.yes)
     start_daemon(app)
+    self_check(fat, app)
     print()
     if problems:
         print('Installed, but not everything downloaded. Run this installer again once the MiSTer is online.')

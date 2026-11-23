@@ -558,6 +558,9 @@ def make_handler(state):
                     return self.reply(state.overview())
                 if u.path == '/api/group':
                     return self.reply(state.group_items(q.get('id', ''), q.get('q', ''), hidden))
+                if u.path == '/api/diagnostics':
+                    from .. import diagnose
+                    return self.reply({'text': diagnose.report(str(DATA) if DEVICE else str(BUILD))})
                 if u.path == '/api/search':
                     return self.reply(state.search(q.get('q', ''), q.get('source', ''), hidden))
                 if u.path == '/api/share/stamp':

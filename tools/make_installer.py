@@ -51,7 +51,7 @@ def main():
             if f.is_file() and f.suffix in ('.py', '.html') and '__pycache__' not in f.parts:
                 add(tar, f.relative_to(ROOT).as_posix(), f.read_bytes())
         inst = ROOT / 'tools' / 'installer'
-        for name in ('install_setup.py', 'MiSTer_90s_TV_daemon.sh', 'Uninstall_MiSTer_90s_TV.sh'):
+        for name in ('install_setup.py', 'MiSTer_90s_TV_daemon.sh', 'MiSTer_90s_TV_Diagnose.sh', 'Uninstall_MiSTer_90s_TV.sh'):
             add(tar, name, (inst / name).read_bytes().replace(b'\r\n', b'\n'), 0o755)
         add(tar, 'cacert.pem', (ROOT / 'third_party' / 'certs' / 'cacert.pem').read_bytes())
         add(tar, 'CERTIFICATES-NOTICE.txt', (ROOT / 'third_party' / 'certs' / 'CERTIFICATES-NOTICE.txt').read_bytes())

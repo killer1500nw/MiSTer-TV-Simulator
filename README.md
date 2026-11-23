@@ -2,7 +2,7 @@
 
 Turn a MiSTer into a 90s set-top box. It builds **live TV channels from your own Jellyfin and Plex libraries**: shows start on the half hour, ad breaks fill the gaps, a scrolling guide lists what's on, and changing channel goes through a burst of static. Point it at a CRT and press channel up. You start it like any other core: **Other → MiSTer 90s TV**.
 
-> **Version 0.7.1b (beta).** Tested on one MiSTer (analog CRT output), Jellyfin 10.11 and Plex 1.43; a user reports it also works with Jellyfin 12.4 and S-Video. Expect rough edges and please report them.
+> **Version 0.7.2b (beta).** Tested on one MiSTer (analog CRT output), Jellyfin 10.11 and Plex 1.43; a user reports it also works with Jellyfin 12.4 and S-Video. Expect rough edges and please report them.
 
 | Channel banner | Guide (Satellite look) | Set-up screen |
 |---|---|---|
@@ -39,6 +39,7 @@ It puts these on the SD card and touches nothing outside `/media/fat`:
 | `MiSTer_90s_TV/` | ffmpeg 7.0.2 (about 31 MB), downloaded and checked against a pinned SHA-256 |
 | `_Other/MiSTer 90s TV_<date>.rbf` | the menu entry, listed as **Other → MiSTer 90s TV** with its date like any core. It is a copy of owenb321's H.264 core under this program's name (the MiSTer menu only shows dates for `.rbf` cores). **Run the installer again after updating the H.264 core** so the copy follows it. |
 | `linux/user-startup.sh` | three lines (between `MiSTer 90s TV Simulator` marker lines) that start a small background program at boot. It waits for you to choose the menu entry and then starts the player; it also keeps the web page running. **The installer asks before adding them.** |
+| `Scripts/MiSTer_90s_TV_Diagnose.sh` | prints a report of what is installed and running, for bug reports (secrets removed) |
 | `Scripts/Uninstall_MiSTer_90s_TV.sh` | removes everything above, including those three lines |
 | `_Other/H264_*.rbf` | owenb321's core, only if it isn't there already and you say yes |
 
@@ -117,8 +118,12 @@ They can share one SD card, and all three can be used one after another without 
 - **The player quit to the menu:** read `Scripts/.config/MiSTer_90s_TV/log.txt` (and `studio.log`). The player reloads a stuck core by itself a few times before giving up.
 - **A channel plays only station idents / "back in a moment":** it has nothing scheduled right now. Studio leaves out channels with no items; check the pool's filters.
 - **Plex shows nothing after Apply:** check the source's address is reachable from the MiSTer (a plain `http://192.168.x.x:32400` is the simplest).
-- **Choosing the menu entry only shows a test pattern:** the background starter isn't running. It starts at boot (reboot once after installing), or start it by hand with `bash /media/fat/Scripts/.config/MiSTer_90s_TV/daemon.sh`.
+- **Choosing the menu entry only shows a test pattern:** the player was not started. The background starter writes the reason to `Scripts/.config/MiSTer_90s_TV/daemon.log`: look for a line saying the core is loaded but not from Other > MiSTer 90s TV (you chose the plain H.264 core entry instead of ours), or that the core reports a different name, or that the player ended several times in a row. If there is no such line, the starter isn't running: it starts at boot (reboot once after installing), or start it by hand with `bash /media/fat/Scripts/.config/MiSTer_90s_TV/daemon.sh`. Run **Scripts → MiSTer_90s_TV_Diagnose** to see all of this in one place.
 - **Remove everything:** run `Uninstall_MiSTer_90s_TV` from the Scripts menu.
+
+## Reporting a problem
+
+Run **Scripts → MiSTer_90s_TV_Diagnose** on the MiSTer (or press **Diagnostics** in Studio) and include the text it prints in your issue. It lists the version, what the MiSTer loaded and how, what is running, which files are installed, your sources (without keys) and the ends of the logs. API keys, Plex tokens and Studio's code are removed; network addresses stay, so look it over before posting. The same text is saved as `Scripts/.config/MiSTer_90s_TV/diagnostics.txt`. The installer also keeps what it printed, with a self-check, in `install.log` in the same folder.
 
 ## How it works (short)
 

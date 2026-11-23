@@ -18,6 +18,27 @@ OTHER_FEEDERS = ('youtube_crt.py --daemon',)      # a program that would grab th
 POLL = 1.0
 
 
+STATE = '/tmp/c90_daemon.json'
+
+
+def version():
+    try:
+        with open(os.path.join(FOLDER, 'VERSION.txt')) as f:
+            return f.read().strip()
+    except OSError:
+        return '?'
+
+
+def write_state(**fields):
+    """A tiny file the diagnostics report reads: when the starter last looked, and what it saw."""
+    try:
+        import json
+        with open(STATE, 'w') as f:
+            json.dump(dict(fields, time=time.strftime('%Y-%m-%d %H:%M:%S'), pid=os.getpid()), f)
+    except OSError:
+        pass
+
+
 def log(msg):
     print('%s %s' % (time.strftime('%Y-%m-%d %H:%M:%S'), msg), flush=True)
 
@@ -51,6 +72,33 @@ def loaded_by_our_entry(procs):
         if args[0].endswith('/MiSTer') and any(ENTRY_MARK in a.lower().replace('_', ' ') for a in args[1:]):
             return True
     return False
+
+
+def main_program_args(procs):
+    """The files the MiSTer program was started with (the core and menu entry it loaded), or None when it is not found."""
+    for _, args in procs:
+        if args[0].endswith('/MiSTer'):
+            return args[1:]
+    return None
+
+
+def explain(name, procs):
+    """-> (ours, message): may the player start, and if not, why (so that it can be written to the log once). The message is '' when
+    there is nothing to say (the menu is showing, or all is well)."""
+    ours_loaded = loaded_by_our_entry(procs)
+    args = main_program_args(procs)
+    shown = ' '.join('"%s"' % a for a in args) if args else '(the MiSTer program was not found)'
+    if name in ('MENU', ''):
+        return False, ''
+    if name == 'H264' and ours_loaded:
+        return True, ''
+    if name != 'H264' and ours_loaded:
+        return False, ('our menu entry is loaded but the core reports its name as %r, not "H264": the player does not start. '
+                       'The MiSTer program was started with: %s' % (name, shown))
+    if name == 'H264':
+        return False, ('the H.264 core is loaded, but not from Other > MiSTer 90s TV, so the player does not start '
+                       '(this is the plain core, or the entry of another program). The MiSTer program was started with: %s' % shown)
+    return False, 'another core (%r) is loaded: leaving it alone. The MiSTer program was started with: %s' % (name, shown)
 
 
 def feeder_pids(procs):
@@ -100,8 +148,11 @@ def start_studio():
 def main():
     if running(processes(), 'tvsim.daemon'):
         return 0                                           # one is enough
-    log('watching for Other > MiSTer 90s TV (folder %s)' % FOLDER)
+    log('MiSTer 90s TV Simulator %s: the background starter is watching for Other > MiSTer 90s TV (folder %s, Python %s)' % (
+        version(), FOLDER, sys.version.split()[0]))
     player, started, quick, last_studio = None, 0.0, 0, 0.0
+    last_name, last_message, last_state, said_quick = None, None, 0.0, False
+    explained, last_explain = None, 0.0
     stopped = []                                                         # commands of the other players of the core stopped while ours runs
 
     def let_go():
@@ -124,6 +175,19 @@ def main():
         try:
             now = time.time()
             name = core_name()                                           # (one tiny file read: the process list is only read when needed)
+            if name != last_name:                                        # log every change of core, and why we do or do not act on it
+                log('the core is now %r' % name)
+                last_name, last_message, explained = name, None, None
+            if name not in ('MENU', '') and player is None and (name != explained or (name == 'H264' and now - last_explain > 3.0)):
+                explained, last_explain = name, now                      # (the process list is read once per new core, then every 3 s for the H.264 core
+                ok, message = explain(name, processes())                  # only, which the program's command line can lag behind)
+                if message != last_message:
+                    last_message = message
+                    if message:
+                        log(message)
+            if now - last_state > 10.0:
+                last_state = now
+                write_state(core=name, player=player.pid if player is not None and player.poll() is None else None, said=last_message or '')
             if now - last_studio > 15.0:
                 last_studio = now
                 if not running(processes(), 'tvsim.studio'):
@@ -141,7 +205,10 @@ def main():
                 log('the player ended (exit %s)' % player.returncode)
                 player = None
             if name != 'H264':
-                quick = 0                                                # the menu is back: the next choice gets a fresh start
+                quick, said_quick = 0, False                             # the menu is back: the next choice gets a fresh start
+            elif player is None and quick >= 4 and name == 'H264' and not said_quick:
+                said_quick = True
+                log('the player ended 4 times within 20 seconds each time: not starting it again until the menu is shown. See log.txt and /tmp/c90.out')
             elif player is None and quick < 4 and now - started > 5.0 and ours(processes()):
                 for pid, args in processes():                             # one program at a time can feed the core: stop the other (it is started again later)
                     if pid in feeder_pids([(pid, args)]):
@@ -156,6 +223,7 @@ def main():
                                           stdin=subprocess.DEVNULL, start_new_session=True)
                 started = now
                 log('started the player')
+                last_message = ''                                         # (nothing is in the way any more)
         except Exception as exc:                                         # never let the watcher die
             log('error: %s' % exc)
         time.sleep(POLL)

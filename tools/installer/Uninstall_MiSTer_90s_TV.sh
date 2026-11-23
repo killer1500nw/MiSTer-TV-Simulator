@@ -16,7 +16,7 @@ for p in $(ps | grep -v grep | grep -E "youtube_crt.py --daemon" | awk '{print $
 if [ -f /media/fat/linux/user-startup.sh ]; then
   sed -i '/# BEGIN MiSTer 90s TV Simulator/,/# END MiSTer 90s TV Simulator/d' /media/fat/linux/user-startup.sh
 fi
-rm -f "/media/fat/_Other/MiSTer 90s TV.mgl" /media/fat/_Other/"MiSTer 90s TV"_*.rbf /media/fat/Scripts/MiSTer_90s_TV.sh
+rm -f "/media/fat/_Other/MiSTer 90s TV.mgl" /media/fat/_Other/"MiSTer 90s TV"_*.rbf /media/fat/Scripts/MiSTer_90s_TV.sh /media/fat/Scripts/MiSTer_90s_TV_Diagnose.sh
 rm -rf "$D" "$H"
 echo "Removed."
 rm -f "$0"
